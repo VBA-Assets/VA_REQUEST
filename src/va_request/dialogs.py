@@ -1,4 +1,4 @@
-"""確かめ・選ぶための小さな画面（印刷・例文の登録・解像度）。"""
+"""確かめ・選ぶための小さな画面（印刷・例文の登録・例文の選択・解像度）。"""
 import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
@@ -6,13 +6,12 @@ from pathlib import Path
 
 from . import printing
 from .ui import theme
+from .ui.wrapped_list import WrappedList
 
-# 例文の一覧の高さ（行）。何行かの字の欄は折り返すので 20 行、ほかは 10 行。本体の右の欄の一覧も同じ高さにする
-# （2026-11-14 班長指示）
+# 例文の一覧の高さ（行）。何行かの字の欄は折り返すので 20 行、ほかは 10 行。［例文の選択］の画面の一覧も同じ高さにする
+# （2026-11-14 班長指示。そのときは本体の右の欄の一覧。右の欄は 2026-11-15 に除いた）
 PHRASE_ROWS_WRAP = 20
 PHRASE_ROWS = 10
-# 本体の右の欄の、何行かの字の入力欄の高さ（行）
-MULTI_EDITOR_ROWS = 7
 
 
 class _Dialog(tk.Toplevel):
@@ -123,6 +122,64 @@ class PrintDialog(_Dialog):
         self.cfg.set_printer_offset(name, dx, dy)
         self.cfg.save()
         self.result = (name, self.mode, dx, dy)
+        self.destroy()
+
+
+class PhraseSelectDialog(_Dialog):
+    """［例文の選択］：1つの欄の例文から1つを選ぶ（2026-11-15 班長指示「「例文の選択」ボタンを押すと選択フォームが
+    表示」。それまでは本体の右の欄に一覧を出していた）。結果は選んだ例文（やめれば None）。
+
+    何行かの字の欄（wrap）は、例文を折り返して表示する（WrappedList）。ほかの欄は1行に1つ（改行は ⏎ で示す）。
+    ダブルクリック・Enter・［入れる］で選ぶ。入れる先は、本体の入力欄のいまの文字の位置。
+    """
+
+    def __init__(self, master, items, field_label, field_font, wrap=False):
+        super().__init__(master, "例文の選択")
+        self.resizable(True, True)
+        self.items = list(items)
+        b = self.body
+        ttk.Label(b, text=f"{field_label} の例文").grid(row=0, column=0, sticky="w")
+        frame = ttk.Frame(b)
+        frame.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
+        if wrap:
+            lb = WrappedList(frame, height=PHRASE_ROWS_WRAP, font=field_font, width=50)
+            for it in self.items:
+                lb.insert("end", it)
+            lb.grid(row=0, column=0, sticky="nsew")
+            lb.bind("<<ListboxDouble>>", lambda e: self.ok())
+        else:
+            lb = tk.Listbox(frame, height=PHRASE_ROWS, width=50, font=field_font, activestyle="none",
+                            exportselection=False, background=theme.FIELD_BG, foreground=theme.TEXT, relief="solid",
+                            borderwidth=1, highlightthickness=0, selectbackground=theme.PRESSED_BG,
+                            selectforeground=theme.TEXT)
+            for it in self.items:
+                lb.insert("end", it.replace("\n", " ⏎ "))
+            bar = ttk.Scrollbar(frame, orient="vertical", command=lb.yview)
+            lb.configure(yscrollcommand=bar.set)
+            lb.grid(row=0, column=0, sticky="nsew")
+            bar.grid(row=0, column=1, sticky="ns")
+            lb.bind("<Double-Button-1>", lambda e: self.ok())
+            lb.activate(0)
+            self.after_idle(lb.focus_set)        # 矢印キーで選べるように
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        lb.selection_set(0)
+        self.list = lb
+        ttk.Label(b, text="ダブルクリックか［入れる］で、入力欄の、いまの文字の位置に入れます。",
+                  style="Note.TLabel").grid(row=2, column=0, sticky="w", pady=(4, 0))
+        btns = ttk.Frame(b)
+        btns.grid(row=3, column=0, sticky="e", pady=(12, 0))
+        ttk.Button(btns, text="入れる", style="Accent.TButton", command=self.ok).pack(side="left", padx=(0, 6))
+        ttk.Button(btns, text="キャンセル", command=self.cancel).pack(side="left")
+        b.columnconfigure(0, weight=1)
+        b.rowconfigure(1, weight=1)
+        self.bind("<Return>", lambda e: self.ok())
+
+    def ok(self):
+        sel = self.list.curselection()
+        if not sel:
+            return
+        self.result = self.items[sel[0]]
         self.destroy()
 
 

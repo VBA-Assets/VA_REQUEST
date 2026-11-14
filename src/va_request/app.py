@@ -1,8 +1,10 @@
 """VA Request の画面（仕様.md の 4.3〜4.7）。
 
-・左に用紙の画像と、その上に刷る字を重ねて表示する（プレビュー）。欄をクリックして入れる（ツールは欄の名前を持たない。
-  利用者は、用紙の画像に刷ってある項目名を見て入れる）。囲み・印・元号は、用紙の上をクリックして付け外しする。
-・右に、選んだ欄の入力と例文。例文の登録と既定の値は、リボンのボタンで行う（2026-11-14 班長指示）。
+・用紙の画像と、その上に刷る字を重ねて表示する（プレビュー）。欄をクリックすると、用紙の上のその欄の位置に入力欄を
+  重ねて出し、その場で字を入れる（ツールは欄の名前を持たない。利用者は、用紙の画像に刷ってある項目名を見て入れる）。
+  囲み・印・元号は、用紙の上をクリックして付け外しする。右の欄は持たない（2026-11-15 班長指示「右側のペイン全体を削除」）。
+・例文は、リボンの［例文の選択］で開く画面から選ぶ（同日 班長指示）。例文の登録と既定の値も、リボンのボタンで行う。
+  選んでいる欄の呼び名と既定の値は、下の状態の行に出す。
 ・欄の呼び名は、日付欄・宛名欄と、表の左の列の空欄を上から数えた欄1・欄1-1 など（様式の定義の label）。
 ・［欄の位置］で、欄をドラッグして用紙に合わせる（ロットによる違い）。［用紙の画像］で、自分の用紙のスキャン画像を読み込む。
 ・PDF は用紙の画像入りで保存し、開き直して直せる。直した後の保存は上書きだけ（［別の名前で保存］はない）。
@@ -10,6 +12,7 @@
 """
 import io
 import tkinter as tk
+import tkinter.font as tkfont
 from datetime import date
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -20,13 +23,11 @@ from PIL import Image, ImageTk
 from . import VERSION_LABEL, diagnostics, forms, pdfdoc, printing, render
 from .config import Config
 from .phrases import FILE_NAME as PHRASES_FILE, PhrasesChanged, PhrasesError, PhraseStore
-from .dialogs import (MULTI_EDITOR_ROWS, PHRASE_ROWS, PHRASE_ROWS_WRAP, DpiDialog, OptionsDialog, PhrasesDialog,
-                      PrintDialog)
+from .dialogs import DpiDialog, OptionsDialog, PhraseSelectDialog, PhrasesDialog, PrintDialog
 from .ui import ime, theme
 from .ui.icons import IconSet
 from .ui.ribbon import Ribbon
 from .ui.window_icon import set_window_icon
-from .ui.wrapped_list import WrappedList
 
 TITLE = "VA Request"
 ABOUT_LINE = "職務上請求書の用紙に、字を正しい位置に刷る"
@@ -35,7 +36,8 @@ FORM_LABELS = {"A": "A用紙　戸籍謄本等職務上請求書", "B": "B用紙
 KIND_LABELS = {"text": "1行の字", "multiline": "何行かの字", "number": "数", "circle": "囲み（○）",
                "check": "印（✓）", "date": "日付"}
 PAGE_MM = (210.0, 297.0)
-SIDE_WIDTH = 360            # 右の欄の幅の既定（96 dpi の画素）
+PAPER_FONTS = ("ＭＳ 明朝", "MS Mincho")      # 用紙の上の入力欄の書体（刷る字と同じ）
+EDITOR_MIN_PX = 11          # 用紙の上の入力欄の字の高さの下限（96 dpi の画素。用紙を小さく表示したときも読めるように）
 MARGIN = 12                 # プレビューの用紙のまわりの余白（画素）
 RENDER_DELAY = 120          # 入力してからプレビューを描き直すまでの間（ms）
 SNAP = 0.1                  # 位置を合わせるときの刻み（mm）
@@ -65,7 +67,7 @@ class App:
 
         self.key = self.cfg.get("form") if self.cfg.get("form") in forms.FORM_KEYS else "A"
         self.form = forms.effective(self.cfg, self.key)
-        self.values = self.cfg.defaults(self.key)
+        self.values = forms.known_values(self.form, self.cfg.defaults(self.key))
         self.path = None            # 保存した（開いた）PDF の場所。あれば、保存は上書きだけ
         self.opened = False         # PDF を開いた請求か（欄の位置と用紙の画像は、保存したときのもの）
         self.image_bytes = None     # 開いた PDF の用紙の画像
@@ -81,9 +83,13 @@ class App:
         self._drag = None
         self._corner_image = None
         self._suspend = False       # 入力欄を作り直している間、値の変化を拾わない
+        self.editors = []           # 用紙の上に重ねた入力欄（日付は年・月・日の3つ）
+        self.editor = None          # 例文を入れる先（いま字を入れている入力欄）
+        families = set(tkfont.families(root))
+        self.paper_family = next((f for f in PAPER_FONTS if f in families), None)
 
         self._build()
-        self._load_editor()
+        self._load_modebar()
         self._update_title()
         root.protocol("WM_DELETE_WINDOW", self.close)
         self._restore_window()
@@ -117,30 +123,31 @@ class App:
                                     tip="欄をドラッグして、用紙に合わせます。用紙のロットが替わったときに使います。")
 
         g = self.ribbon.group("入力")
+        self.btn_choose = g.large("例文の選択", self.choose_phrase, icon="clipboard_paste",
+                                  tip="選んでいる欄の例文を、一覧から選んで入れます。入力欄の、いまの文字の位置に入ります。")
         self.btn_phrases = g.small("例文の登録", self.edit_phrases, icon="text_bullet_list_square",
                                    tip="選んでいる欄の例文を、足したり直したりします。")
         self.btn_default = g.small("既定の値にする", self.set_default, icon="save_edit",
                                    tip="選んでいる欄の今の値を、新しい請求の初めから入れておきます（弁護士の氏名・登録番号など）。")
         self.btn_clear_default = g.small("既定の値を消す", self.clear_default, icon="delete",
                                          tip="選んでいる欄の既定の値を消します。新しい請求の初めから入らなくなります。")
+        self.btn_today = g.small("今日の日付", self.today, icon="calendar_checkmark",
+                                 tip="選んでいる日付の欄（選んでいなければ日付欄）に、今日の日付を入れます。")
 
         self.status = ttk.Label(root, style="Status.TLabel", anchor="w")
         self.status.pack(fill="x", side="bottom")
+        # 欄の位置合わせ・用紙の左上の角を決める間だけ、リボンの下に出す帯（右の欄を除いたので、ここに置く）
+        self.modebar = ttk.Frame(root, padding=(10, 6))
 
-        body = tk.PanedWindow(root, orient="horizontal", sashwidth=6, background=theme.WINDOW_BG, borderwidth=0)
+        body = ttk.Frame(root)
         body.pack(fill="both", expand=True)
-        left = ttk.Frame(body)
-        self.canvas = tk.Canvas(left, background="#d9d9d9", highlightthickness=0, takefocus=True)
-        vbar = ttk.Scrollbar(left, orient="vertical", command=self.canvas.yview)
+        self.canvas = tk.Canvas(body, background="#d9d9d9", highlightthickness=0, takefocus=True)
+        vbar = ttk.Scrollbar(body, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=vbar.set)
         self.canvas.grid(row=0, column=0, sticky="nsew")
         vbar.grid(row=0, column=1, sticky="ns")
-        left.rowconfigure(0, weight=1)
-        left.columnconfigure(0, weight=1)
-        self.side = ttk.Frame(body, padding=(10, 8))
-        body.add(left, stretch="always", minsize=theme.px(root, 400))
-        side_width = self.cfg.get("side_width") or SIDE_WIDTH
-        body.add(self.side, stretch="never", width=theme.px(root, side_width), minsize=theme.px(root, 280))
+        body.rowconfigure(0, weight=1)
+        body.columnconfigure(0, weight=1)
         self.body = body
 
         c = self.canvas
@@ -148,7 +155,8 @@ class App:
         c.bind("<ButtonPress-1>", self._on_press)
         c.bind("<B1-Motion>", self._on_motion)
         c.bind("<ButtonRelease-1>", self._on_release)
-        c.bind("<MouseWheel>", lambda e: c.yview_scroll(int(-e.delta / 120) * 3, "units"))
+        c.bind("<MouseWheel>", self._wheel)
+        c.bind("<Escape>", lambda e: self.deselect() if self.mode == "input" else None)
         for key, d in (("Left", (-1, 0)), ("Right", (1, 0)), ("Up", (0, -1)), ("Down", (0, 1))):
             c.bind(f"<{key}>", lambda e, d=d: self._nudge(d, 0.5))
             c.bind(f"<Shift-{key}>", lambda e, d=d: self._nudge(d, SNAP))
@@ -179,6 +187,8 @@ class App:
         name = Path(self.path).name if self.path else "新しい請求"
         self.root.title(f"{'*' if self.dirty else ''}{name} - {TITLE}")
         parts = [FORM_LABELS[self.key]]
+        if self.mode == "input":
+            parts.append(self._field_status())
         if self.opened:
             parts.append("開いた PDF（保存は上書き）")
         elif self.path:
@@ -193,14 +203,33 @@ class App:
             parts.append("用紙の左上の角をクリックしてください")
         self.status.configure(text="　｜　".join(parts))
         state = "disabled" if self.mode != "input" else "normal"
-        for b in (self.btn_save, self.btn_print, self.btn_phrases, self.btn_default,
-                  self.btn_clear_default):
+        for b in (self.btn_save, self.btn_print, self.btn_choose, self.btn_phrases, self.btn_default,
+                  self.btn_clear_default, self.btn_today):
             b.configure(state=state)
         for label in ("新しい請求", "開く…", "保存", "オプション…"):     # 位置合わせの間は、ファイルの操作をしない
             self.file_menu.entryconfigure(label, state=state)
         for b in (self.btn_paper, self.btn_position):
             b.configure(state="disabled" if self.opened or self.mode == "corner" else "normal")
         self.form_box.configure(state="disabled" if self.opened or self.mode != "input" else "readonly")
+
+    def _field_status(self):
+        """状態の行に出す、選んでいる欄の呼び名・種類・既定の値と、操作の案内（右の欄に出していたもの）。"""
+        if self.selected is None:
+            return "欄（点線の四角）をクリックすると、その場で字を入れられます。○ と ✓ は、用紙の上の語や□をクリックします"
+        f = self.field(self.selected)
+        kind = f["type"]
+        text = f"{forms.label(f)}（{KIND_LABELS[kind]}）"
+        # 既定の値は、あるときだけ、その値を出す（2026-11-14 班長指示。「既定の値：なし」は出さない）
+        default = self.cfg.defaults(self.key).get(f["id"])
+        if default is not None:
+            text += "　既定の値：" + self.value_text(f, default)
+        hint = {"text": "Enter・Tab で次の欄", "number": "Enter・Tab で次の欄",
+                "multiline": "欄の幅で折り返します。Enter で改行、Tab で次の欄",
+                "date": "Tab で年・月・日を移ります" + ("。元号は、用紙の上の語をクリック" if "era" in f else ""),
+                "circle": f"用紙の上の{'番号' if f.get('direction') == 'down' else '語'}をクリックすると ○ が付き、"
+                          "もう一度で外れます",
+                "check": "□ をクリックすると ✓ が付き、もう一度で外れます"}[kind]
+        return f"{text}　（{hint}）"
 
     def _labels(self, ids):
         return "・".join(forms.label(self.field(i)) for i in ids)
@@ -262,10 +291,12 @@ class App:
             page.alpha_composite(layer.resize(page.size) if layer.size != page.size else layer)
         self._photo = ImageTk.PhotoImage(page.convert("RGB"), master=self.root)
         c = self.canvas
-        c.delete("all")
+        c.delete("page", "overlay")         # 用紙の上の入力欄（editor）は消さない（入力の途中で描き直すため）
         c.create_image(MARGIN, MARGIN, image=self._photo, anchor="nw", tags="page")
+        c.tag_lower("page")
         c.configure(scrollregion=(0, 0, page.width + 2 * MARGIN, page.height + 2 * MARGIN))
         self.draw_overlay()
+        self._layout_editors()
         self._update_title()
 
     def _to_px(self, box):
@@ -330,6 +361,8 @@ class App:
             return
         name, f = self.hit(x, y)
         if f is None:
+            if self.selected is not None:
+                self.deselect()             # 用紙の空いた所をクリックすると、入力欄を閉じて刷り上がりの形を見せる
             return
         fid, sub = f["id"], name.partition(".")[2]
         if f["type"] == "circle":
@@ -344,37 +377,45 @@ class App:
             self.set_value(fid, {k: x for k, x in v.items() if x is not None})
         self.select(fid, focus_part=sub if sub in forms.PARTS else None)
 
+    def _wheel(self, event):
+        self.canvas.yview_scroll(int(-event.delta / 120) * 3, "units")
+        return "break"
+
+    # ================================================================ 用紙の上の入力欄
+    # 右の欄の入力欄に代えて、用紙の上のその欄の位置に入力欄を重ねて出す（2026-11-15 班長指示「プレビュー画面に直接
+    # 入力するようにできないか」「右側のペイン全体を削除」）。入力欄はキャンバスの窓の項目（create_window）で、用紙と
+    # 一緒にスクロールし、用紙の大きさが変わると、位置・大きさ・字の大きさを合わせ直す。入力している間の字は画面の
+    # 書体（ＭＳ 明朝）で出し、入りきらないときの縮小は、ほかの欄に移ると（入力欄を閉じると）刷り上がりの形で見える。
     def select(self, fid, focus_part=None):
-        self.selected = fid
-        self._load_editor(focus_part)
+        """欄を選び、入力欄を出す。同じ欄を選び直したときは、入力欄はそのままで focus_part（年・月・日）に移る。"""
+        if fid is not None and fid == self.selected and self.editors:
+            self._focus_part(focus_part)
+        else:
+            self.selected = fid
+            self._open_editor(focus_part)
         self.draw_overlay()
+        self._update_title()
 
-    def _clear_side(self):
-        for w in self.side.winfo_children():
-            w.destroy()
+    def deselect(self):
+        self.selected = None
+        self._close_editor()
+        self.draw_overlay()
+        self._update_title()
+        self.canvas.focus_set()
 
-    def _load_editor(self, focus_part=None):
-        """右の欄に、選んだ欄の入力を作る。"""
-        self._clear_side()
-        s = self.side
-        if self.mode == "position":
-            self._load_position_panel()
-            return
-        if self.mode == "corner":
-            ttk.Label(s, text="用紙の左上の角をクリックしてください。", style="Section.TLabel").pack(anchor="w")
-            ttk.Label(s, text="スキャンした画像の、用紙の左上の角（紙の端）をクリックします。用紙の位置が決まります。",
-                      wraplength=theme.px(s, 320), justify="left").pack(anchor="w", pady=(6, 0))
-            ttk.Button(s, text="やめる", command=self.cancel_corner).pack(anchor="w", pady=(12, 0))
-            return
-        if self.selected is None:
-            ttk.Label(s, text="欄を選んでください", style="Section.TLabel").pack(anchor="w")
-            ttk.Label(s, text="左の用紙の上で、字を入れたい欄（点線の四角）をクリックします。囲み（○）と印（✓）は、"
-                              "用紙の上の語や□をクリックすると付き、もう一度クリックすると外れます。",
-                      wraplength=theme.px(s, 320), justify="left").pack(anchor="w", pady=(6, 0))
+    def _close_editor(self):
+        self.canvas.delete("editor")
+        for ed in self.editors:
+            ed["widget"].destroy()
+        self.editors = []
+        self.editor = None
+
+    def _open_editor(self, focus_part=None):
+        self._close_editor()
+        if self.selected is None or self.mode != "input":
             return
         f = self.field(self.selected)
         kind = f["type"]
-        ttk.Label(s, text=f"{forms.label(f)}　{KIND_LABELS[kind]}", style="Section.TLabel").pack(anchor="w")
         self._suspend = True
         try:
             if kind in ("text", "number"):
@@ -382,83 +423,134 @@ class App:
             elif kind == "multiline":
                 self._editor_multi(f)
             elif kind == "date":
-                self._editor_date(f, focus_part)
-            elif kind == "circle":
-                self._editor_circle(f)
-            elif kind == "check":
-                self._editor_check(f)
+                self._editor_date(f)
         finally:
             self._suspend = False
-        if kind in ("text", "number", "multiline"):
-            self._phrase_panel(f)
-        # 既定の値は、あるときだけ、その値を出す（2026-11-14 班長指示。「既定の値：なし」は出さない）
-        default = self.cfg.defaults(self.key).get(f["id"])
-        if default is not None:
-            self.default_label = ttk.Label(s, text="既定の値：" + self.value_text(f, default), style="Note.TLabel",
-                                           wraplength=theme.px(s, 320), justify="left")
-            self.default_label.pack(anchor="w", pady=(14, 0))
-        else:
-            self.default_label = None
+        self._layout_editors()
+        self._focus_part(focus_part)
 
-    @staticmethod
-    def value_text(f, v):
-        """欄の値を、画面に出す1つの文にする（既定の値の表示）。"""
-        kind = f["type"]
-        if kind == "circle":
-            return f"○（左から {int(v) + 1} 番目）"
-        if kind == "check":
-            return "✓"
-        if kind == "date":
-            era = f"元号は左から {v['era'] + 1} 番目、" if v.get("era") is not None else ""
-            return era + "".join(f"{v[p]}{u}" for p, u in (("year", "年"), ("month", "月"), ("day", "日")) if v.get(p))
-        return str(v)
+    def _paper_font(self):
+        if self.paper_family:
+            return tkfont.Font(root=self.root, family=self.paper_family, size=-12)
+        return tkfont.Font(root=self.root, font=self.field_font)
+
+    def _add_editor(self, widget, box, kind, font, part=None, var=None):
+        item = self.canvas.create_window(0, 0, window=widget, anchor="nw", tags="editor")
+        widget.bind("<MouseWheel>", self._wheel)
+        widget.bind("<Escape>", lambda e: (self.deselect(), "break")[1])
+        widget.bind("<FocusIn>", lambda e, w=widget: setattr(self, "editor", w), add="+")
+        self.editors.append({"widget": widget, "item": item, "box": box, "kind": kind, "font": font, "part": part,
+                             "var": var})
+
+    def _editor_px(self, kind, box):
+        """入力欄の字の高さ（画素）。刷る字の大きさ（render の上限）を、いまの表示の縮尺にしたもの。"""
+        if kind == "multiline":
+            pt = render.SIZE_MULTI
+        else:
+            pt = min(render.SIZE_MAX, (box[3] - box[1]) / 25.4 * 72 * 0.85)
+        # 切り捨てる（画面の書体は刷る字より少し幅を取るので、入力欄が刷り上がりより早く折り返さないように）
+        return max(theme.px(self.root, EDITOR_MIN_PX), int(pt / 72 * 25.4 * self._ppm))
+
+    def _layout_editors(self):
+        """入力欄を、欄の位置と大きさに合わせる（用紙の大きさが変わったときも）。字が欄より高ければ、入力欄を広げる。"""
+        c = self.canvas
+        for ed in self.editors:
+            x0, y0, x1, y1 = self._to_px(ed["box"])
+            font = ed["font"]
+            size = self._editor_px(ed["kind"], ed["box"])
+            if ed.get("size") != size:      # 入力のたびに描き直すので、大きさが変わったときだけ付け直す
+                ed["size"] = size
+                font.configure(size=-size)
+                if isinstance(ed["widget"], ttk.Entry):
+                    # ttk の入力欄は、書体の大きさを変えても、字が変わるまでカーソルの高さを前の大きさ（作ったときの
+                    # 12 画素）のままにする（2026-11-15 班長指摘「カーソルの縦の長さが短い」。1行の字の欄だけで、何行かの字の
+                    # 欄〔Text〕は正常）。書体を付け直して、カーソルの高さを測り直させる
+                    ed["widget"].configure(font=font)
+            line = font.metrics("linespace")
+            w, h = x1 - x0, y1 - y0
+            if ed["part"] == "year" and not self._form_has_era_printed():
+                w = max(w, font.measure("令和00") + 6)      # A・B は年に元号を付けて入れる（［今日の日付］も）
+            if ed["kind"] == "multiline":
+                ed["widget"].configure(spacing3=round(size * (render.LINE_GAP - 1)))
+                h = max(h, 2 * line + 4)
+            else:
+                h = max(h, line + 4)
+            c.coords(ed["item"], x0, y0)
+            c.itemconfigure(ed["item"], width=round(w), height=round(h))
+
+    def _focus_part(self, part=None):
+        if not self.editors:
+            self.canvas.focus_set()
+            return
+        ed = next((e for e in self.editors if e["part"] == part), self.editors[0])
+        w = ed["widget"]
+        w.focus_set()
+        if isinstance(w, tk.Text):
+            w.mark_set("insert", "end")
+        else:
+            w.icursor("end")
+        self.editor = w
+
+    def _see_editor(self):
+        """入力欄が見えていなければ、見える所までスクロールする（Tab で次の欄に移ったとき）。"""
+        if not self.editors:
+            return
+        c = self.canvas
+        y0 = min(self._to_px(e["box"])[1] for e in self.editors)
+        y1 = max(self._to_px(e["box"])[3] for e in self.editors)
+        top = c.canvasy(0)
+        height = c.winfo_height()
+        try:
+            total = float(str(c.cget("scrollregion")).split()[3])
+        except (IndexError, ValueError):
+            return
+        if total > 0 and (y0 < top or y1 > top + height):
+            c.yview_moveto(max(0.0, (y0 - height / 3) / total))
+
+    def _keys(self, widget, tab=None, back=None):
+        """Enter・Tab で次の欄、Shift+Tab で前の欄（何行かの字の欄は、Enter で改行するので Enter を拾わない）。"""
+        if not isinstance(widget, tk.Text):
+            widget.bind("<Return>", lambda ev: (self.next_field(1), "break")[1])
+        widget.bind("<Tab>", lambda ev: ((tab or (lambda: self.next_field(1)))(), "break")[1])
+        widget.bind("<Shift-Tab>", lambda ev: ((back or (lambda: self.next_field(-1)))(), "break")[1])
 
     def _editor_line(self, f):
         var = tk.StringVar(value=str(self.values.get(f["id"], "")))
-        e = ttk.Entry(self.side, textvariable=var, font=self.field_font)
-        e.pack(fill="x", pady=(6, 0))
+        font = self._paper_font()
+        e = ttk.Entry(self.canvas, textvariable=var, font=font, style="Paper.TEntry")
         var.trace_add("write", lambda *a: self._suspend or self.set_value(f["id"], var.get()))
-        e.bind("<Return>", lambda ev: (self.next_field(1), "break")[1])
-        e.bind("<Tab>", lambda ev: (self.next_field(1), "break")[1])
-        e.bind("<Shift-Tab>", lambda ev: (self.next_field(-1), "break")[1])
-        e.focus_set()
-        e.icursor("end")
-        self.editor = e
+        self._keys(e)
+        self._add_editor(e, f["box"], f["type"], font, var=var)
 
     def _editor_multi(self, f):
-        t = tk.Text(self.side, height=MULTI_EDITOR_ROWS, wrap="char", font=self.field_font, relief="solid", borderwidth=1,
-                    background=theme.FIELD_BG, foreground=theme.TEXT, highlightthickness=1,
-                    highlightcolor=theme.ACCENT, highlightbackground=theme.BORDER, undo=True)
+        font = self._paper_font()
+        insert = theme.px(self.root, theme.PAPER_INSERT_WIDTH)
+        t = tk.Text(self.canvas, width=1, height=1, wrap="char", font=font, relief="flat", borderwidth=0, padx=1, pady=0,
+                    background=theme.FIELD_BG, foreground=theme.TEXT, insertbackground=theme.TEXT, insertwidth=insert,
+                    highlightthickness=1, highlightcolor=theme.ACCENT, highlightbackground=theme.ACCENT, undo=True)
+        # Text はカーソルを字の境目を中心に描き、行の中の左端より左は描かない。行の頭（空の欄・2行目の頭）では左半分が
+        # 消えて、1行の欄の半分の太さになる（2026-11-15 班長指摘「欄8-6や欄9-2は細い」。2 画素が 1 画素だった）。
+        # 余白（padx）は行の外なので効かない。行の中の左の余白（lmargin）をカーソルの太さだけ付けて、隠れないようにする。
+        # 打った字にも付くよう、字が変わるたびに全体に付け直す
+        t.tag_configure("margin", lmargin1=insert, lmargin2=insert)
         t.insert("1.0", str(self.values.get(f["id"], "")))
+        t.tag_add("margin", "1.0", "end")
         t.edit_modified(False)
-        t.pack(fill="x", pady=(6, 0))
 
         def changed(event=None):
             if t.edit_modified():
                 t.edit_modified(False)
+                t.tag_add("margin", "1.0", "end")
                 if not self._suspend:
                     self.set_value(f["id"], t.get("1.0", "end-1c"))
         t.bind("<<Modified>>", changed)
-        t.bind("<Tab>", lambda ev: (self.next_field(1), "break")[1])
-        t.bind("<Shift-Tab>", lambda ev: (self.next_field(-1), "break")[1])
-        ttk.Label(self.side, text="欄の幅で折り返します。Enter で改行します。", style="Note.TLabel").pack(anchor="w")
-        t.focus_set()
-        t.mark_set("insert", "end")
-        self.editor = t
+        self._keys(t)
+        self._add_editor(t, f["box"], "multiline", font)
 
-    def _editor_date(self, f, focus_part):
+    def _editor_date(self, f):
         v = dict(self.values.get(f["id"]) or {})
-        row = ttk.Frame(self.side)
-        row.pack(anchor="w", pady=(6, 0))
+        parts = [p for p in forms.PARTS if p in f.get("parts", {})]
         vars_ = {}
-        entries = {}
-        for part, label in (("year", "年"), ("month", "月"), ("day", "日")):
-            var = tk.StringVar(value=str(v.get(part, "")))
-            e = ttk.Entry(row, textvariable=var, width=7, font=self.field_font)
-            e.pack(side="left")
-            ttk.Label(row, text=label).pack(side="left", padx=(2, 8))
-            vars_[part] = var
-            entries[part] = e
 
         def changed(*a):
             if self._suspend:
@@ -467,89 +559,91 @@ class App:
             for p, var in vars_.items():
                 cur[p] = var.get().strip()
             self.set_value(f["id"], {k: x for k, x in cur.items() if x not in ("", None)})
-        for var in vars_.values():
-            var.trace_add("write", changed)
-        for p, e in entries.items():
-            e.bind("<Return>", lambda ev: (self.next_field(1), "break")[1])
 
-        def today():
-            d = date.today()
-            year = str(d.year - 2018)
-            if not self._form_has_era_printed():
-                year = f"令和{year}"
-            self._suspend = True
-            vars_["year"].set(year)
-            vars_["month"].set(str(d.month))
+        def step(i, d):
+            j = i + d
+            if 0 <= j < len(self.editors):
+                self._focus_part(self.editors[j]["part"])
+            else:
+                self.next_field(d)
+        for i, part in enumerate(parts):
+            var = tk.StringVar(value=str(v.get(part, "")))
+            font = self._paper_font()
+            e = ttk.Entry(self.canvas, textvariable=var, font=font, style="Paper.TEntry")
+            var.trace_add("write", changed)
+            vars_[part] = var
+            self._keys(e, tab=lambda i=i: step(i, 1), back=lambda i=i: step(i, -1))
+            self._add_editor(e, f["parts"][part], "date", font, part=part, var=var)
+
+    def today(self):
+        """［今日の日付］：選んでいる日付の欄（選んでいなければ日付欄）に、今日の日付を入れる。"""
+        if self.mode != "input":
+            return
+        dates = [f for f in self.form["fields"] if f["type"] == "date"]
+        if not dates:
+            return
+        if self.selected is None or self.field(self.selected)["type"] != "date":
+            self.select(dates[0]["id"])
+        d = date.today()
+        year = str(d.year - 2018)
+        if not self._form_has_era_printed():
+            year = f"令和{year}"
+        cur = dict(self.values.get(self.selected) or {})
+        cur.update(year=year, month=str(d.month), day=str(d.day))
+        self.set_value(self.selected, cur)
+        self._suspend = True
+        try:
+            for ed in self.editors:
+                if ed["var"] is not None and ed["part"] in cur:
+                    ed["var"].set(cur[ed["part"]])
+        finally:
             self._suspend = False
-            vars_["day"].set(str(d.day))
-        ttk.Button(row, text="今日", command=today).pack(side="left")
-        if "era" in f:
-            era = v.get("era")
-            ttk.Label(self.side, text="元号は、用紙の上の M・T・S・H などをクリックして ○ を付けます。"
-                      + (f"（いまは左から {era + 1} 番目）" if era is not None else "（いまは付いていません）"),
-                      style="Note.TLabel", wraplength=theme.px(self.side, 320), justify="left").pack(anchor="w", pady=(4, 0))
-        e = entries.get(focus_part or "year")
-        e.focus_set()
-        e.icursor("end")
-        self.editor = e
+
+    @staticmethod
+    def value_text(f, v):
+        """欄の値を、画面に出す1つの文にする（既定の値の表示）。"""
+        kind = f["type"]
+        if kind == "circle":
+            return f"○（{'上' if f.get('direction') == 'down' else '左'}から {int(v) + 1} 番目）"
+        if kind == "check":
+            return "✓"
+        if kind == "date":
+            era = f"元号は左から {v['era'] + 1} 番目、" if v.get("era") is not None else ""
+            return era + "".join(f"{v[p]}{u}" for p, u in (("year", "年"), ("month", "月"), ("day", "日")) if v.get(p))
+        return str(v)
 
     def _form_has_era_printed(self):
         """日付の欄の前に元号（平成）が刷ってある様式（C・D）。年は数だけを刷る（2026-11-14 班長決定）。"""
         return self.key in ("C", "D")
 
-    def _editor_circle(self, f):
-        v = self.values.get(f["id"])
-        ttk.Label(self.side, text="用紙の上の語をクリックすると ○ が付き、もう一度クリックすると外れます。"
-                  + (f"（いまは左から {v + 1} 番目）" if v is not None else "（いまは付いていません）"),
-                  wraplength=theme.px(self.side, 320), justify="left").pack(anchor="w", pady=(6, 0))
-        self.editor = None
-
-    def _editor_check(self, f):
-        var = tk.BooleanVar(value=bool(self.values.get(f["id"])))
-        cb = tk.Checkbutton(self.side, text="✓ を付ける", variable=var, background=theme.WINDOW_BG,
-                            activebackground=theme.WINDOW_BG, command=lambda: self.set_value(f["id"], var.get()))
-        cb.pack(anchor="w", pady=(6, 0))
-        self.editor = None
-
-    def _phrase_panel(self, f):
-        s = self.side
-        ttk.Label(s, text="例文", style="Section.TLabel").pack(anchor="w", pady=(14, 2))
+    def choose_phrase(self):
+        """［例文の選択］：選んでいる欄の例文を、選択の画面で選んで入れる（2026-11-15 班長指示。右の欄の一覧に代えて）。"""
+        if self.mode != "input":
+            return
+        if self.selected is None or self.field(self.selected)["type"] not in ("text", "number", "multiline"):
+            messagebox.showinfo(TITLE, "例文は、字を入れる欄を選んでから選びます。", parent=self.root)
+            return
+        f = self.field(self.selected)
         try:
             items = self.phrase_store.phrases(self.key, f["id"])
         except PhrasesError:
-            ttk.Label(s, text="例文のファイルを読めません。保存場所（［ファイル］→［オプション］）につながっているかを"
-                              "確かめてください。", style="Note.TLabel", wraplength=theme.px(s, 320),
-                      justify="left").pack(anchor="w")
+            messagebox.showerror(TITLE, "例文のファイルを読めません。保存場所（［ファイル］→［オプション］）に"
+                                        "つながっているかを確かめてください。", parent=self.root)
             return
         if not items:
-            ttk.Label(s, text="この欄の例文はありません。リボンの［例文の登録］で足せます。", style="Note.TLabel").pack(anchor="w")
+            messagebox.showinfo(TITLE, f"この欄（{forms.label(f)}）の例文はありません。リボンの［例文の登録］で足せます。",
+                                parent=self.root)
             return
-
-        def put(event=None):
-            sel = lb.curselection()
-            if sel:
-                self.insert_phrase(items[sel[0]])
-        if f["type"] == "multiline":
-            # 何行かの字の欄は、例文を折り返して表示し、右にスクロールバーを付ける（2026-11-14 班長指示）
-            lb = WrappedList(s, height=PHRASE_ROWS_WRAP, font=self.field_font)
-            for it in items:
-                lb.insert("end", it)
-            lb.bind("<<ListboxDouble>>", put)
-        else:
-            lb = tk.Listbox(s, height=PHRASE_ROWS, font=self.field_font, activestyle="none",
-                            exportselection=False, background=theme.FIELD_BG, foreground=theme.TEXT, relief="solid",
-                            borderwidth=1, highlightthickness=0, selectbackground=theme.PRESSED_BG,
-                            selectforeground=theme.TEXT)
-            for it in items:
-                lb.insert("end", it.replace("\n", " ⏎ "))
-            lb.bind("<Double-Button-1>", put)
-        lb.pack(fill="x")
-        self.phrase_list = lb
-        ttk.Button(s, text="入れる", command=put).pack(anchor="e", pady=(4, 0))
-        ttk.Label(s, text="ダブルクリックでも入ります。入力欄の、いまの文字の位置に入れます。", style="Note.TLabel").pack(anchor="w")
+        text = PhraseSelectDialog(self.root, items, forms.label(f), self.field_font,
+                                  wrap=f["type"] == "multiline").show()
+        if text is None:
+            if self.editor is not None and self.editor.winfo_exists():
+                self.editor.focus_set()
+            return
+        self.insert_phrase(text)
 
     def insert_phrase(self, text):
-        e = getattr(self, "editor", None)
+        e = self.editor
         if e is None or not e.winfo_exists():
             return
         if isinstance(e, tk.Text):
@@ -566,6 +660,9 @@ class App:
         cur = self.selected if self.selected in ids else ids[0] - step
         idx = (ids.index(cur) + step) % len(ids) if cur in ids else 0
         self.select(ids[idx])
+        if step < 0 and len(self.editors) > 1:
+            self._focus_part(self.editors[-1]["part"])      # 前の欄へ戻るときは、日付の日に入る
+        self._see_editor()
 
     def edit_phrases(self):
         if self.selected is None or self.field(self.selected)["type"] not in ("text", "number", "multiline"):
@@ -593,7 +690,7 @@ class App:
                         TITLE, "例文の登録の画面を開いている間に、ほかの人（またはほかの画面）が例文のファイルを"
                                f"変えました。\n\nこの欄（{forms.label(f)}）の例文を、いま登録した内容で書きますか？"
                                "（ほかの欄の例文は、変えられたもののまま残ります）", parent=self.root):
-                    self._load_editor()
+                    self._update_title()
                     return
                 store.save_field(self.key, fid, result, force=True)
         except PhrasesError:
@@ -601,7 +698,7 @@ class App:
                                         "つながっているか、ほかのソフトで開いていないかを確かめてください。",
                                  parent=self.root)
             return
-        self._load_editor()
+        self._update_title()
 
     def _migrate_phrases(self):
         """前の版で設定ファイルに書いていた例文を、例文のファイルへ移す（ファイルにある例文の後ろに足す）。"""
@@ -643,7 +740,7 @@ class App:
         self.cfg.set_phrases_folder(chosen)
         self.cfg.save()
         self.phrase_store = new_store
-        self._load_editor()
+        self._update_title()
 
     def set_default(self):
         if self.selected is None:
@@ -655,14 +752,14 @@ class App:
             return
         self.cfg.set_default(self.key, self.selected, v)
         self.cfg.save()
-        self._load_editor()
+        self._update_title()
 
     def clear_default(self):
         if self.selected is None:
             return
         self.cfg.set_default(self.key, self.selected, None)
         self.cfg.save()
-        self._load_editor()
+        self._update_title()
 
     # ================================================================ 請求（新しい・開く・保存）
     def _confirm_discard(self):
@@ -672,7 +769,7 @@ class App:
                                    default="no", parent=self.root)
 
     def _reset(self, key, form, values, path=None, opened=False, image=None):
-        self.key, self.form, self.values = key, form, values
+        self.key, self.form, self.values = key, form, forms.known_values(form, values)
         self.path, self.opened, self.image_bytes = path, opened, image
         self.selected = None
         self.pos_sel.clear()
@@ -680,7 +777,8 @@ class App:
         self.dirty = False
         self._bg_cache = None
         self.form_var.set(FORM_LABELS[key])
-        self._load_editor()
+        self._close_editor()
+        self._load_modebar()
         self.render_now()
 
     def new_request(self):
@@ -842,7 +940,8 @@ class App:
         self._corner_source = path
         self.mode = "corner"
         self._bg_cache = None
-        self._load_editor()
+        self._close_editor()
+        self._load_modebar()
         self.render_now()
 
     def _corner_click(self, x, y):
@@ -857,7 +956,8 @@ class App:
         self.mode = "input"
         self.form = forms.effective(self.cfg, self.key)
         self._bg_cache = None
-        self._load_editor()
+        self._close_editor()
+        self._load_modebar()
         self.render_now()
         messagebox.showinfo(TITLE, "用紙の画像を読み込みました。欄（点線の四角）が用紙の欄に合っているかを見て、ずれていれば"
                                    "［欄の位置］で合わせてください。", parent=self.root)
@@ -866,7 +966,8 @@ class App:
         self._corner_image = None
         self.mode = "input"
         self._bg_cache = None
-        self._load_editor()
+        self._close_editor()
+        self._load_modebar()
         self.render_now()
 
     def reset_paper(self):
@@ -885,19 +986,45 @@ class App:
             return
         self.mode = "input" if self.mode == "position" else "position"
         self.pos_sel.clear()
-        self._load_editor()
+        self._close_editor()
+        self._load_modebar()
         self.render_now()
 
+    def _load_modebar(self):
+        """欄の位置合わせ・用紙の左上の角を決める間だけ、リボンの下に帯を出す（右の欄にあったもの。2026-11-15）。"""
+        bar = self.modebar
+        for w in bar.winfo_children():
+            w.destroy()
+        if self.mode == "input":
+            bar.pack_forget()
+            return
+        bar.pack(fill="x", before=self.body)
+        if self.mode == "corner":
+            ttk.Label(bar, text="用紙の左上の角をクリックしてください。", style="Section.TLabel").grid(
+                row=0, column=0, sticky="w")
+            ttk.Label(bar, text="スキャンした画像の、用紙の左上の角（紙の端）をクリックします。用紙の位置が決まります。",
+                      wraplength=theme.px(bar, 520), justify="left").grid(row=1, column=0, sticky="w", pady=(2, 0))
+            ttk.Button(bar, text="やめる", command=self.cancel_corner).grid(row=0, column=1, rowspan=2, sticky="ne",
+                                                                          padx=(16, 0))
+            bar.columnconfigure(0, weight=1)
+            return
+        self._load_position_panel()
+
     def _load_position_panel(self):
-        s = self.side
-        ttk.Label(s, text="欄の位置を合わせる", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(s, text="欄（オレンジの四角）をドラッグして、用紙の欄に合わせます。Ctrl を押しながらクリックするか、"
-                          "空いた所からドラッグして囲むと、いくつも選んでまとめて動かせます。矢印キーで 0.5mm、"
-                          "Shift を押しながらで 0.1mm 動きます。1つだけ選ぶと、右下の角で大きさを変えられます。"
-                          "合わせた位置は、この PC に覚えます。",
-                  wraplength=theme.px(s, 320), justify="left").pack(anchor="w", pady=(6, 8))
+        s = self.modebar
+        text = ttk.Frame(s)
+        text.grid(row=0, column=0, sticky="nw")
+        ttk.Label(text, text="欄の位置を合わせる", style="Section.TLabel").pack(anchor="w")
+        # Tk は空白で折り返すので、日本語の文の中に半角の空白を置かない（置くと、そこで早く折り返す）
+        ttk.Label(text, text="欄（オレンジの四角）をドラッグして、用紙の欄に合わせます。Ctrlを押しながらクリックするか、"
+                             "空いた所からドラッグして囲むと、いくつも選んでまとめて動かせます。矢印キーで0.5mm、"
+                             "Shiftを押しながらで0.1mm動きます。1つだけ選ぶと、右下の角で大きさを変えられます。"
+                             "合わせた位置は、このPCに覚えます。",
+                  wraplength=theme.px(s, 460), justify="left").pack(anchor="w", pady=(2, 0))
+        nums = ttk.Frame(s)
+        nums.grid(row=0, column=1, sticky="nw", padx=(16, 0))
         self.pos_vars = {}
-        grid = ttk.Frame(s)
+        grid = ttk.Frame(nums)
         grid.pack(anchor="w")
         for i, (k, label) in enumerate((("l", "左"), ("t", "上"), ("w", "幅"), ("h", "高さ"))):
             ttk.Label(grid, text=label).grid(row=i // 2, column=(i % 2) * 3, sticky="e", padx=(0, 2), pady=2)
@@ -907,15 +1034,18 @@ class App:
             e.bind("<Return>", lambda ev: self._apply_numbers())
             ttk.Label(grid, text="mm").grid(row=i // 2, column=(i % 2) * 3 + 2, sticky="w", padx=(2, 10))
             self.pos_vars[k] = var
-        ttk.Button(s, text="数を当てる", command=self._apply_numbers).pack(anchor="w", pady=(4, 0))
-        self.pos_label = ttk.Label(s, style="Note.TLabel")
-        self.pos_label.pack(anchor="w", pady=(4, 0))
-        row = ttk.Frame(s)
-        row.pack(anchor="w", pady=(12, 0))
-        ttk.Button(row, text="選んだ欄を初めの位置に", command=self.reset_selected).pack(side="left")
-        ttk.Button(row, text="すべて初めの位置に", command=self.reset_all).pack(side="left", padx=(6, 0))
-        ttk.Button(s, text="位置合わせを終える", style="Accent.TButton", command=self.toggle_position).pack(
-            anchor="w", pady=(16, 0))
+        row = ttk.Frame(nums)
+        row.pack(anchor="w", pady=(2, 0))
+        ttk.Button(row, text="数を当てる", command=self._apply_numbers).pack(side="left")
+        self.pos_label = ttk.Label(row, style="Note.TLabel")
+        self.pos_label.pack(side="left", padx=(8, 0))
+        resets = ttk.Frame(s)
+        resets.grid(row=0, column=2, sticky="nw", padx=(16, 0))
+        ttk.Button(resets, text="選んだ欄を初めの位置に", command=self.reset_selected).pack(fill="x")
+        ttk.Button(resets, text="すべて初めの位置に", command=self.reset_all).pack(fill="x", pady=(4, 0))
+        ttk.Button(s, text="位置合わせを終える", style="Accent.TButton", command=self.toggle_position).grid(
+            row=0, column=3, sticky="ne", padx=(16, 0))
+        s.columnconfigure(3, weight=1)
         self._show_numbers()
 
     def _show_numbers(self):
@@ -1084,7 +1214,7 @@ class App:
         except Exception:
             pass
 
-    # ================================================================ ウィンドウの大きさ・最大化・右の欄の幅を覚える
+    # ================================================================ ウィンドウの大きさ・最大化を覚える
     # （2026-11-14 班長指摘「プレビュー画面の大きさが保存されない」「ツール全体を最大化したことが保存されない」）
     def _restore_window(self):
         root = self.root
@@ -1115,9 +1245,7 @@ class App:
         if geo:
             self.cfg.set("window_geometry", geo)
         self.cfg.set("window_zoomed", zoomed)
-        width = self.side.winfo_width()
-        if width > 1:
-            self.cfg.set("side_width", int(round(width / theme.scale(root))))
+        self.cfg.data.pop("side_width", None)       # 右の欄は除いた（2026-11-15）。前の版で覚えた幅は消す
 
     def close(self):
         if self.mode == "input" and not self._confirm_discard():

@@ -15,7 +15,7 @@ def test_one_file_for_all_forms(tmp_path):
     assert [p.name for p in (tmp_path / "共有").iterdir()] == [FILE_NAME] == ["職務上請求書例文.json"]
     assert store.load_all() == {"A": {18: ["架空の例文1", "架空の例文2\n2行目"]}, "B": {6: ["架空の宛先"]}}
     body = json.loads(store.path.read_text(encoding="utf-8"))
-    assert body["forms"]["A"]["title"] == "A用紙" and body["forms"]["A"]["fields"]["18"]["label"] == "欄8-6"
+    assert body["forms"]["A"]["title"] == "A用紙" and body["forms"]["A"]["fields"]["18"]["label"] == "欄7-6"
     store.save_field("A", 18, [], expected_stamp=store.stamp())        # 空にすると消える
     assert store.load_all() == {"B": {6: ["架空の宛先"]}}
 

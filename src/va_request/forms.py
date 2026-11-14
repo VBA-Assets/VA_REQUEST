@@ -27,6 +27,13 @@ def is_empty(value):
     return False
 
 
+def known_values(form, values):
+    """様式にある欄の値だけを残す。欄から外した欄（A の 10。2026-11-15）の値は、前に保存した PDF や既定の値に
+    残っていても、表示も印刷もしないので、持ち続けない（保存し直したときに PDF に残さない）。"""
+    ids = {f["id"] for f in form["fields"]}
+    return {k: v for k, v in values.items() if k in ids}
+
+
 def label(field):
     """欄の呼び名（日付欄・宛名欄・欄1-1 など。様式の定義の label。2026-11-14 班長指示）。"""
     return field.get("label") or f"欄{field['id']}"
@@ -40,6 +47,8 @@ def item_label(form, name):
     if not sub:
         return base
     if sub[0] == "o":
+        if f.get("direction") == "down":        # 縦に並んだ番号（A の番号欄）
+            return f"{base}（上から {int(sub[1:]) + 1} 番目の番号）"
         return f"{base}（左から {int(sub[1:]) + 1} 番目の語）"
     if sub[0] == "e":
         return f"{base}（元号の左から {int(sub[1:]) + 1} 番目）"

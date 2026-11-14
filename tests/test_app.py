@@ -49,12 +49,57 @@ def center(box):
 
 
 def test_click_text_field_and_type(app):
+    """欄をクリックすると、用紙の上のその欄の位置に入力欄が出て、その場で入れられる（2026-11-15 班長指示）。"""
     box = forms.item_box(app.form, "6")
     click(app, *center(box))
     assert app.selected == 6
+    assert len(app.editors) == 1 and app.canvas.find_withtag("editor")
+    x, y = app.canvas.coords(app.editors[0]["item"])
+    assert (x, y) == pytest.approx(app._to_px(box)[:2])          # 欄の左上に重ねる
     app.editor.insert("end", "架空の字")
     app.root.update()
     assert app.values[6] == "架空の字" and app.dirty
+    # 描き直しても、入力欄は消えない
+    app.render_now()
+    assert app.canvas.find_withtag("editor") and app.editor.winfo_exists()
+    # 用紙の大きさが変わると、入力欄も合わせて動く
+    app._ppm *= 1.5
+    app._layout_editors()
+    assert app.canvas.coords(app.editors[0]["item"]) == pytest.approx(app._to_px(box)[:2])
+    # 空いた所をクリックすると、入力欄を閉じる
+    click(app, 1, 1)
+    assert app.selected is None and not app.editors and not app.canvas.find_withtag("editor")
+
+
+def test_multiline_and_date_on_paper(app):
+    app.select(18)
+    assert isinstance(app.editor, tk.Text) and str(app.editor.cget("wrap")) == "char"
+    # カーソルを太くする（2026-11-15 班長指摘「カーソルが小さい」）。1行の欄（Paper.TEntry）も同じ太さ
+    width = app_mod.theme.px(app.root, app_mod.theme.PAPER_INSERT_WIDTH)
+    assert int(app.editor.cget("insertwidth")) == width >= 2
+    assert int(ttk.Style(app.root).lookup("Paper.TEntry", "insertwidth")) == width
+    app.editor.insert("end", "架空の1行目\n架空の2行目")
+    app.root.update()
+    assert app.values[18] == "架空の1行目\n架空の2行目"
+    # 日付は、年・月・日の位置に3つの入力欄
+    app.select(1)
+    assert [e["part"] for e in app.editors] == ["year", "month", "day"]
+    app.editors[0]["widget"].insert("end", "令和7")
+    app.editors[1]["widget"].insert("end", "11")
+    assert app.values[1] == {"year": "令和7", "month": "11"}
+    # Tab で年・月・日を移ることは、隠したウィンドウではキーの出来事が届かないので、実際の画面で確かめる
+    app.today()
+    v = app.values[1]
+    assert v["year"].startswith("令和") and v["day"] and app.editors[2]["var"].get() == v["day"]
+    # 日付の欄を選んでいなければ、［今日の日付］は日付欄（1つ目の日付の欄）に入れる
+    app.deselect()
+    del app.values[1]
+    app.btn_today.invoke()
+    assert app.selected == 1 and app.values[1]["month"]
+    # 次の欄へ
+    app.select(21)
+    app.next_field(1)
+    assert app.selected != 21 and app.editors
 
 
 def test_click_circle_and_check(app):
@@ -64,6 +109,13 @@ def test_click_circle_and_check(app):
     assert 3 not in app.values                    # もう一度で外れる
     click(app, *center(forms.item_box(app.form, "15")))
     assert app.values[15] is True
+    # A の番号欄（2026-11-15）：1つだけ選ぶ。ほかの番号を押すと、そちらに移る
+    click(app, *center(forms.item_box(app.form, "26.o2")))
+    assert app.values[26] == 2 and app.selected == 26
+    click(app, *center(forms.item_box(app.form, "26.o0")))
+    assert app.values[26] == 0
+    assert app.value_text(app.field(26), 2) == "○（上から 3 番目）"
+    assert "番号欄（囲み（○））" in app.status.cget("text") and "番号をクリック" in app.status.cget("text")
 
 
 def test_save_open_overwrite_only(app, tmp_path, monkeypatch):
@@ -84,19 +136,50 @@ def test_save_open_overwrite_only(app, tmp_path, monkeypatch):
     assert pdfdoc.read(path)["values"][6] == "直した字"
 
 
+def test_open_pdf_saved_before_number_field(app, tmp_path):
+    """番号欄（26）を足す前に保存した PDF も開ける。番号欄は ○ のない状態で、組み込みの位置に出る。"""
+    import copy
+    old = copy.deepcopy(app.form)
+    old["fields"] = [f for f in old["fields"] if f["id"] != 26]
+    path = tmp_path / "前の版.pdf"
+    pdfdoc.save(path, old, {6: "架空の字"})
+    app.open_pdf(path, confirmed=True)
+    assert app.opened and app.values == {6: "架空の字"}
+    assert any(f["id"] == 26 for f in app.form["fields"])
+    assert forms.item_box(app.form, "26.o0") == forms.item_box(forms.builtin("A"), "26.o0")
+    app.set_value(26, 1)                                  # 開いた後に ○ を付けて、上書きできる
+    assert app.save() and pdfdoc.read(path)["values"][26] == 1
+
+
+def test_values_of_removed_field_are_dropped(app, tmp_path):
+    """欄から外した A の 10（見出しの行）の値は、前の PDF・既定の値にあっても持たない（2026-11-15）。"""
+    import copy
+    old = copy.deepcopy(app.form)
+    old["fields"].append({"id": 10, "label": "欄5", "type": "text", "box": [59.0, 84.3, 184.1, 88.8], "align": "left"})
+    path = tmp_path / "前の版.pdf"
+    pdfdoc.save(path, old, {6: "架空の字", 10: "架空の見出しの字"})
+    app.open_pdf(path, confirmed=True)
+    assert app.values == {6: "架空の字"}
+    app.cfg.set_default("A", 10, "架空の既定の値")
+    app.new_request()
+    assert 10 not in app.values
+
+
 def test_defaults_for_new_request(app):
     app.select(21)
-    assert app.default_label is None                 # 既定の値がなければ、何も出さない
+    assert "既定の値" not in app.status.cget("text")     # 既定の値がなければ、何も出さない
     app.editor.insert("end", "架空 一郎")
     app.set_default()
-    assert app.default_label.cget("text") == "既定の値：架空 一郎"
+    assert "既定の値：架空 一郎" in app.status.cget("text")      # 状態の行に出す（右の欄は除いた）
     app.new_request()
     assert app.values == {21: "架空 一郎"}
 
 
 def test_position_drag_and_nudge(app):
+    app.select(6)
     app.toggle_position()
     assert app.mode == "position"
+    assert not app.editors and app.modebar.winfo_manager() == "pack"     # 入力欄を閉じ、リボンの下に帯を出す
     box = forms.item_box(app.form, "6")
     cx, cy = center(box)
     click(app, cx, cy)
@@ -112,41 +195,67 @@ def test_position_drag_and_nudge(app):
     app.reset_selected()
     assert forms.item_box(app.form, "6") == box and "6" not in app.cfg.positions("A")
     app.toggle_position()
-    assert app.mode == "input"
+    assert app.mode == "input" and app.modebar.winfo_manager() == ""
 
 
-def test_side_panel_and_ribbon(app):
-    """右の欄にボタン（例文の登録・既定の値にする・既定の値を消す）を置かず、リボンに置く（2026-11-14 班長指示）。"""
+def test_no_side_pane_and_choose_phrase(app, monkeypatch):
+    """右の欄は持たない。例文は、リボンの［例文の選択］で開く画面から選ぶ（2026-11-15 班長指示）。"""
+    assert not hasattr(app, "side")
+    assert app.btn_choose.cget("text") == "例文の選択"
     app.phrase_store.save_field("A", 18, ["架空の長い例文" * 10, "架空の例文\n2行目"], force=True)
-    app.select(18)
-    texts = []
+    # 欄を選んでいなければ、知らせるだけ
+    app.choose_phrase()
+    assert app.shown[-1][0] == "showinfo"
+    shown = []
 
-    def walk(w):
-        for c in w.winfo_children():
-            try:
-                texts.append(str(c.cget("text")))
-            except tk.TclError:
-                pass
-            walk(c)
-    walk(app.side)
-    assert not {"例文の登録…", "既定の値にする", "既定の値を消す"} & set(texts)
-    assert texts[0] == "欄8-6　何行かの字"
-    assert isinstance(app.phrase_list, app_mod.WrappedList)         # 何行かの字は折り返す一覧
-    assert str(app.phrase_list.text.cget("wrap")) == "char"
-    assert int(app.phrase_list.text.cget("height")) == 20       # 例文の登録の画面の一覧と同じ高さ
-    app.phrase_list.selection_set(1)
-    app.phrase_list.event_generate("<<ListboxDouble>>")
+    class FakeDialog:
+        def __init__(self, master, items, label, font, wrap=False):
+            shown.append((items, label, wrap))
+            self.items = items
+
+        def show(self):
+            return self.items[1]
+    monkeypatch.setattr(app_mod, "PhraseSelectDialog", FakeDialog)
+    app.select(18)
+    app.editor.insert("end", "架空の前置き")
+    app.btn_choose.invoke()
     app.root.update()                       # 何行かの欄の <<Modified>> は、後から届く
-    assert app.values[18] == "架空の例文\n2行目"
+    assert shown[-1][1:] == ("欄7-6", True)
+    assert app.values[18] == "架空の前置き架空の例文\n2行目"      # 入力欄のいまの文字の位置に入れる
+    # 1行の字の欄は、改行を空白にして入れる
+    app.phrase_store.save_field("A", 6, ["架空", "架空の\n例文"], force=True)
+    app.select(6)
+    app.btn_choose.invoke()
+    assert app.values[6] == "架空の 例文" and shown[-1][2] is False
+    # 例文のない欄は、知らせるだけ（画面を出さない）
+    app.select(21)
+    n = len(shown)
+    app.choose_phrase()
+    assert len(shown) == n and "例文はありません" in app.shown[-1][1][1]
     # 既定の値を消すボタン
+    app.select(18)
     app.set_default()
     assert 18 in app.cfg.defaults("A")
     app.btn_clear_default.invoke()
     assert 18 not in app.cfg.defaults("A")
-    # 1行の字の欄は、今までどおりの一覧
-    app.phrase_store.save_field("A", 6, ["架空"], force=True)
-    app.select(6)
-    assert isinstance(app.phrase_list, tk.Listbox) and int(app.phrase_list.cget("height")) == 10
+
+
+def test_phrase_select_dialog(root):
+    """［例文の選択］の画面：何行かの字は折り返す一覧（20 行）、ほかは 10 行の一覧。"""
+    from va_request.dialogs import PhraseSelectDialog
+    font = ("TkTextFont", 10)
+    from va_request.ui.wrapped_list import WrappedList
+    d = PhraseSelectDialog(root, ["架空の例文1", "架空の例文2\n2行目"], "欄7-6", font, wrap=True)
+    assert isinstance(d.list, WrappedList)
+    assert str(d.list.text.cget("wrap")) == "char" and int(d.list.text.cget("height")) == 20
+    d.list.selection_set(1)
+    d.ok()
+    assert d.result == "架空の例文2\n2行目"
+    d = PhraseSelectDialog(root, ["架空A", "架空B"], "欄2", font)
+    assert isinstance(d.list, tk.Listbox) and int(d.list.cget("height")) == 10
+    assert d.list.curselection() == (0,)         # 初めは1つ目を選んでおく
+    d.cancel()
+    assert d.result is None
 
 
 def test_phrases_dialog_edit_in_list(root):
@@ -189,29 +298,25 @@ def test_file_menu_and_save_button(app):
 
 
 def test_remember_window(app, monkeypatch, tmp_path):
-    """最大化と右の欄の幅を覚え、次に開いたときに戻す（2026-11-14 班長指摘）。"""
+    """最大化を覚え、次に開いたときに戻す（2026-11-14 班長指摘）。右の欄の幅は、右の欄を除いたので覚えない。"""
     app._normal_geometry = "1000x700+10+20"
+    app.cfg.set("side_width", 450)                     # 前の版で覚えた幅
     monkeypatch.setattr(app.root, "state", lambda *a: "zoomed")
-    monkeypatch.setattr(app.side, "winfo_width", lambda: round(450 * app_mod.theme.scale(app.root)))
     app._save_window()
     assert app.cfg.get("window_zoomed") is True
     assert app.cfg.get("window_geometry") == "1000x700+10+20"      # 最大化する前の大きさ
-    assert app.cfg.get("side_width") == 450
-    # 次に開いたとき：最大化し、右の欄の幅を戻す
+    assert app.cfg.get("side_width") is None
+    # 次に開いたとき：最大化する
     calls = []
     monkeypatch.setattr(app.root, "state", lambda *a: calls.append(a) or "normal")
     app._restore_window()
     assert ("zoomed",) in calls
-    for w in app.root.winfo_children():
-        w.destroy()
-    again = app_mod.App(app.root, app.cfg)
-    assert int(again.body.panecget(again.side, "width")) == app_mod.theme.px(app.root, 450)
 
 
 def test_change_form(app):
     app.form_var.set(app_mod.FORM_LABELS["C"])
     app.change_form()
-    assert app.key == "C" and len(app.form["fields"]) == 22
+    assert app.key == "C" and len(app.form["fields"]) == 23      # 番号欄（23）を足した（2026-11-15）
     assert app.cfg.get("form") == "C"
 
 

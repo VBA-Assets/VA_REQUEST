@@ -15,6 +15,7 @@ TEXT = "#1a1a1a"           # 通常テキスト
 NOTE = "#666666"           # 補足・注記テキスト
 BORDER = "#c8c8c8"         # 枠線・区切り線
 ACCENT = "#0078d4"         # アクセント（フォーカス枠線・主要ボタンの強調枠）
+PAPER_INSERT_WIDTH = 2     # 用紙の上の入力欄のカーソルの太さ（96 dpi の画素。VA Request）
 DISABLED_TEXT = "#a0a0a0"
 READONLY_BG = "#f7f7f7"    # 閲覧モードの入力欄の地
 # リボンのボタンのアイコン（VA Document と同じ色。2026-11-13 班長指示「リボンのコマンドボタンをVA Documentのように変更」）
@@ -157,6 +158,12 @@ def apply_theme(root):
     style.configure("Auto.TLabel", font=(UI_FONT_FAMILY, UI_FONT_SIZE, "underline"))
     style.configure("TEntry", fieldbackground=FIELD_BG, bordercolor=BORDER, lightcolor=FIELD_BG,
                     darkcolor=FIELD_BG, insertcolor=TEXT, padding=2)
+    # 用紙の上に重ねる入力欄（VA Request。2026-11-15 班長指示「プレビュー画面に直接入力」）。選んでいる欄と分かるよう、
+    # 枠はいつもアクセントの青。欄の高さに字を収めるため、余白はほとんど取らない。カーソル（縦の棒）は太くする
+    # （2026-11-15 班長指摘「カーソルが小さい」。既定の 1 画素では、用紙の上で見つけにくい）
+    style.configure("Paper.TEntry", fieldbackground=FIELD_BG, bordercolor=ACCENT, lightcolor=FIELD_BG,
+                    darkcolor=FIELD_BG, insertcolor=TEXT, padding=(1, 0), insertwidth=px(root, PAPER_INSERT_WIDTH))
+    style.map("Paper.TEntry", bordercolor=[("focus", ACCENT)])
     style.map("TEntry", bordercolor=[("focus", ACCENT)], fieldbackground=[("readonly", READONLY_BG)])
     # 直せない値の欄（VA Filing・VA Receipt の保管済みの行の、備考のほかの欄。2026-11-13 班長決定「案１のみ」：直せる
     # 欄と見分けがつかなかった）。地を窓の地と同じにし、枠線も地の色にして、入力欄に見えないようにする。文字は選んで

@@ -15,7 +15,8 @@ LARGE_ICON = 32         # 大きいボタンのアイコンの大きさ
 BUTTON_ICONS = {
     "新しい請求": "document_add", "開く": "folder_open", "保存": "save", "印刷": "print",
     "用紙の画像": "image", "欄の位置": "table",
-    "例文の登録": "text_bullet_list_square", "既定の値にする": "save_edit", "既定の値を消す": "delete",
+    "例文の選択": "clipboard_paste", "例文の登録": "text_bullet_list_square", "既定の値にする": "save_edit",
+    "既定の値を消す": "delete", "今日の日付": "calendar_checkmark",
 }
 
 
