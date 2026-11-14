@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+dist/
+build/
+release_*/
+
+# 試作の出力（試作のスクリプトから作り直せる）
+試作/出力/
+
+# 操作マニュアルの PDF（scripts\generate_manual.py で作る）
+docs/manual/*.pdf
+dist_next/

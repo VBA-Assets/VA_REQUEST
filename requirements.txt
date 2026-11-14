@@ -1,0 +1,5 @@
+# 配るプログラム（src）で使う部品。MIT License と両立するものだけ（PyMuPDF〔AGPL〕は使わない）。
+reportlab
+pypdf
+pypdfium2
+Pillow
