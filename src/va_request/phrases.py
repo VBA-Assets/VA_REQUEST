@@ -45,7 +45,7 @@ class PhraseStore:
         except FileNotFoundError:
             return None
         except OSError as e:
-            raise PhrasesError(str(e)) from e
+            raise PhrasesError("例文のファイルを読み書きできませんでした。") from e
 
     def load_all(self):
         """様式の記号 → 欄の番号 → 例文の並び。ファイルがなければ空。"""
@@ -54,7 +54,7 @@ class PhraseStore:
         except FileNotFoundError:
             return {}
         except (OSError, ValueError) as e:
-            raise PhrasesError(str(e)) from e
+            raise PhrasesError("例文のファイルを読み書きできませんでした。") from e
         out = {}
         for key, form in (data.get("forms", {}) if isinstance(data, dict) else {}).items():
             fields = form.get("fields", {}) if isinstance(form, dict) else {}
@@ -103,4 +103,4 @@ class PhraseStore:
                 tmp.unlink(missing_ok=True)
             except OSError:
                 pass
-            raise PhrasesError(str(e)) from e
+            raise PhrasesError("例文のファイルを読み書きできませんでした。") from e

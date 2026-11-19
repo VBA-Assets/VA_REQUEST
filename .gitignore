@@ -12,3 +12,6 @@ release_*/
 # 操作マニュアルの PDF（scripts\generate_manual.py で作る）
 docs/manual/*.pdf
 dist_next/
+
+# GitHub で公開する写し（別の git。VBA-Assets/VA_REQUEST。2026-11-18 に ..\VA_REQUEST_GitHub から移した）
+/GitHub/

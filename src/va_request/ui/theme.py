@@ -1,6 +1,6 @@
 """画面の配色と部品のスタイル（フラットデザイン。班長の UI 設計方針の「既定配色（Office風）」）。
 
-色の定義は、ここに集める（4つのツールで共通）。VA Document の theme.py にそろえ、ttk は 'clam' テーマを基に
+色の定義は、ここに集める（色を変えるときは、ここだけを直す）。VA Document の theme.py にそろえ、ttk は 'clam' テーマを基に
 見た目を直接指定する。主要な操作のボタンは、地色ではなく枠線の色をアクセント色にして区別する（Accent.TButton）。
 """
 from tkinter import font as tkfont
@@ -22,34 +22,7 @@ READONLY_BG = "#f7f7f7"    # 閲覧モードの入力欄の地
 ICON_TINT = "#9cc9f0"           # アイコンの塗りつぶし版を敷く色（薄い青）
 ICON_TINT_DISABLED = "#e2e2e2"  # 押せないときの、塗りつぶし版の色
 RIBBON_HOVER_BORDER = "#a9cdee"  # リボンのボタンに重ねたときの枠
-TEXT_SELECT_BG = "#9cc8ef"  # 一覧のセルの中で、なぞって選んだ文字の地（選んだ行の地〔PRESSED_BG〕の上でも見分けられる青）
 
-# 一覧の字の色（現行の事件データベースの、現況による色分け。Office のテーマの色に近いもの）
-STATUS_FG = {
-    "closed": "#7f7f7f",    # 終了：灰（アクセント3）
-    "consult": "#548235",   # 相談のみ：緑（アクセント6）
-    "refused": "#c55a11",   # 相談不可：橙（アクセント2）
-}
-PROBLEM_FG = "#c00000"      # 確かめで問題のあった行
-# 書き込み中・書き込み待ちの行（VA Filing の保管・元に戻す）。字の色を、この2つで入れ替えて点滅させる
-# （2026-11-09 班長指示「処理中の行の文字が点滅するのはどうだろうか」）
-PENDING_FG = ACCENT
-PENDING_DIM_FG = "#b3d4f0"
-EDIT_MODE_FG = ACCENT       # 状態の欄の「編集モード」
-# 編集モードの一覧の表のスタイル（2026-11-09 班長指示：VA事件データベース〔VAブリッジ〕と同じく、表のスタイルを替えて
-# 示す。VAブリッジの STYLE_EDIT_MODE＝Excel の TableStyleMedium3〔オレンジ系〕：見出しはオレンジの地に白い太字、
-# 行は1行おきに淡いオレンジ、罫線もオレンジ）。閲覧モードは、ふだんの表（灰色の見出し・縞なし）
-EDIT_TABLE_HEAD_BG, EDIT_TABLE_HEAD_FG = "#ed7d31", "#ffffff"
-EDIT_TABLE_HEAD_ACTIVE = "#f4b183"
-EDIT_TABLE_BAND = "#fbe4d5"
-EDIT_TABLE_BORDER = "#ed7d31"
-# 「編集を始める」のボタン（2026-11-10 班長指示：枠を編集モードのオレンジにする。オレンジに変えたいときは
-# オレンジのボタン、元に戻したいとき〔編集を終える〕は青のボタンを押す）。ホバー・押下・点滅の地色もオレンジ系
-EDIT_BUTTON_HOVER = EDIT_TABLE_BAND       # ホバー時の地色（淡いオレンジ）
-EDIT_BUTTON_PRESSED = "#f8cbad"           # 押下時・点滅の「点いた」側の地色（濃いオレンジ）
-# 閲覧モードの一覧も、1行おきに地の色を変える（2026-11-09 班長指示）。現行の Excel 版の閲覧時の表（TableStyleMedium2）の
-# 縞は淡い青だが、選んだ行の色（PRESSED_BG の淡い青）と見分けにくいので、淡い灰色にする
-VIEW_TABLE_BAND = "#f2f2f2"
 
 UI_FONT_FAMILY = "Yu Gothic UI"
 UI_FONT_SIZE = 9
@@ -104,14 +77,6 @@ def apply_theme(root):
     style.configure("Accent.TButton", bordercolor=ACCENT)
     style.map("Accent.TButton", bordercolor=[("disabled", BORDER), ("!disabled", ACCENT)])
     style.configure("Small.TButton", padding=(6, 1), width=-4)
-    # 「編集を始める」のボタン：枠を編集モードのオレンジにする（2026-11-10 班長指示）。「編集を終える」は Accent.TButton
-    orange = dict(
-        background=[("disabled", CONTROL_BG), ("pressed", EDIT_BUTTON_PRESSED), ("active", EDIT_BUTTON_HOVER)],
-        lightcolor=[("disabled", CONTROL_BG), ("pressed", EDIT_BUTTON_PRESSED), ("active", EDIT_BUTTON_HOVER)],
-        darkcolor=[("disabled", CONTROL_BG), ("pressed", EDIT_BUTTON_PRESSED), ("active", EDIT_BUTTON_HOVER)],
-        bordercolor=[("disabled", BORDER), ("!disabled", EDIT_TABLE_BORDER)])
-    style.configure("EditStart.TButton", bordercolor=EDIT_TABLE_BORDER)
-    style.map("EditStart.TButton", **orange)
     # リボンのボタン（VA Document と同じ。2026-11-13 班長指示「リボンのコマンドボタンをVA Documentのように変更」）：
     # Word のリボンと同じく、ふだんは枠も地もなく、重ねたときだけ淡い青の地と枠を出す（班長の UI 方針の「常時、細い
     # 枠線」の、リボンだけの例外。VA Document の 2026-10-24 班長決定と同じ）。大きいボタン（RibbonLarge）はアイコンの
@@ -128,34 +93,10 @@ def apply_theme(root):
     style.configure("Ribbon.TFrame", background=WINDOW_BG)
     style.configure("Ribbon.TLabel", background=WINDOW_BG)
     style.configure("RibbonGroup.TLabel", background=WINDOW_BG, foreground=NOTE, padding=(0, 0, 0, 2))
-    # リボンの「編集を始める」（大きいボタン）：編集モードの切り替えは見落とされないよう、ほかのリボンのボタンと違い、
-    # いつも枠を出す（閲覧モードではオレンジ、編集モードでは青の「編集を終える」。それまでのボタンと同じ色）
-    for name, border in (("RibbonEdit.TButton", EDIT_TABLE_BORDER), ("RibbonEditEnd.TButton", ACCENT)):
-        style.configure(name, background=CONTROL_BG, bordercolor=border, lightcolor=CONTROL_BG, darkcolor=CONTROL_BG,
-                        padding=(4, 2), width=0, anchor="center", justify="center")
-    style.map("RibbonEdit.TButton", **orange)
-    style.map("RibbonEditEnd.TButton", **states)
-    # 点滅するボタンの「点いた」側（編集を始めている間。2026-11-09 班長指示。2026-11-10 からオレンジ）
-    style.configure("Blink.TButton", background=EDIT_BUTTON_PRESSED, lightcolor=EDIT_BUTTON_PRESSED,
-                    darkcolor=EDIT_BUTTON_PRESSED, bordercolor=EDIT_TABLE_BORDER)
-    style.map("Blink.TButton", background=[("active", EDIT_BUTTON_PRESSED)],
-              lightcolor=[("active", EDIT_BUTTON_PRESSED)], darkcolor=[("active", EDIT_BUTTON_PRESSED)],
-              bordercolor=[("!disabled", EDIT_TABLE_BORDER)])
-    style.configure("RibbonBlink.TButton", background=EDIT_BUTTON_PRESSED, lightcolor=EDIT_BUTTON_PRESSED,
-                    darkcolor=EDIT_BUTTON_PRESSED, bordercolor=EDIT_TABLE_BORDER, padding=(4, 2), width=0,
-                    anchor="center", justify="center")
-    style.map("RibbonBlink.TButton", background=[("active", EDIT_BUTTON_PRESSED)],
-              lightcolor=[("active", EDIT_BUTTON_PRESSED)], darkcolor=[("active", EDIT_BUTTON_PRESSED)],
-              bordercolor=[("!disabled", EDIT_TABLE_BORDER)])
 
     style.configure("Note.TLabel", foreground=NOTE)
-    # 余白のない注記（VA Case のカードの「その他」の列の下。列の空きに収め、カードを高くしないため。2026-11-12）
-    style.configure("TightNote.TLabel", foreground=NOTE, borderwidth=0, padding=0)
     style.configure("Status.TLabel", foreground=NOTE, padding=(6, 2))
-    style.configure("Edit.TLabel", foreground=EDIT_MODE_FG, padding=(6, 2))
     style.configure("Section.TLabel", foreground=TEXT, font=(UI_FONT_FAMILY, UI_FONT_SIZE, "bold"))
-    # オートコンプリートを付けた欄の名前（下線。2026-11-09 班長決定）
-    style.configure("Auto.TLabel", font=(UI_FONT_FAMILY, UI_FONT_SIZE, "underline"))
     style.configure("TEntry", fieldbackground=FIELD_BG, bordercolor=BORDER, lightcolor=FIELD_BG,
                     darkcolor=FIELD_BG, insertcolor=TEXT, padding=2)
     # 用紙の上に重ねる入力欄（VA Request。2026-11-15 班長指示「プレビュー画面に直接入力」）。選んでいる欄と分かるよう、
@@ -165,19 +106,6 @@ def apply_theme(root):
                     darkcolor=FIELD_BG, insertcolor=TEXT, padding=(1, 0), insertwidth=px(root, PAPER_INSERT_WIDTH))
     style.map("Paper.TEntry", bordercolor=[("focus", ACCENT)])
     style.map("TEntry", bordercolor=[("focus", ACCENT)], fieldbackground=[("readonly", READONLY_BG)])
-    # 直せない値の欄（VA Filing・VA Receipt の保管済みの行の、備考のほかの欄。2026-11-13 班長決定「案１のみ」：直せる
-    # 欄と見分けがつかなかった）。地を窓の地と同じにし、枠線も地の色にして、入力欄に見えないようにする。文字は選んで
-    # コピーできる。Tab で入ったときだけ、どこにいるかが分かるよう、灰色の枠線を出す（青は直せる欄に見えるため）
-    style.configure("Locked.TEntry", fieldbackground=WINDOW_BG, bordercolor=WINDOW_BG, lightcolor=WINDOW_BG,
-                    darkcolor=WINDOW_BG)
-    style.map("Locked.TEntry", bordercolor=[("focus", BORDER)],
-              fieldbackground=[("readonly", WINDOW_BG), ("disabled", WINDOW_BG)])
-    # 文字として見せる値（カードの番号・読込ファイル。value_text）。ラベルと同じ見た目で、なぞって選び Ctrl+C でコピーできる
-    # （2026-11-13 班長指摘「カードで番号がコピーできない」）。枠も余白もなくし、ラベルと同じ高さにする
-    style.configure("Value.TEntry", fieldbackground=WINDOW_BG, bordercolor=WINDOW_BG, lightcolor=WINDOW_BG,
-                    darkcolor=WINDOW_BG, borderwidth=0, padding=0)
-    style.map("Value.TEntry", bordercolor=[("focus", WINDOW_BG)],
-              fieldbackground=[("readonly", WINDOW_BG), ("disabled", WINDOW_BG)])
     style.configure("TSpinbox", fieldbackground=FIELD_BG, background=CONTROL_BG, bordercolor=BORDER,
                     lightcolor=FIELD_BG, darkcolor=FIELD_BG, arrowcolor=TEXT, insertcolor=TEXT, padding=2)
     style.map("TSpinbox", bordercolor=[("focus", ACCENT)], background=[("active", HOVER_BG)])
@@ -198,11 +126,9 @@ def apply_theme(root):
     style.map("TRadiobutton", background=[("active", WINDOW_BG)],
               indicatorbackground=[("pressed", PRESSED_BG), ("active", HOVER_BG)])
     style.configure("TLabelframe", background=WINDOW_BG, bordercolor=BORDER)
-    # 一覧の下の入力欄（カード）の枠と題名の帯。編集モードは、一覧の見出しと同じオレンジ（2026-11-10 班長決定）
+    # 枠で囲んだ欄（カード）
     style.configure("Card.TFrame", background=WINDOW_BG, borderwidth=1, relief="solid", bordercolor=BORDER,
                     lightcolor=BORDER, darkcolor=BORDER)
-    style.configure("EditCard.TFrame", background=WINDOW_BG, borderwidth=1, relief="solid",
-                    bordercolor=EDIT_TABLE_BORDER, lightcolor=EDIT_TABLE_BORDER, darkcolor=EDIT_TABLE_BORDER)
     style.configure("TLabelframe.Label", background=WINDOW_BG, foreground=TEXT)
     style.configure("Treeview", background=FIELD_BG, fieldbackground=FIELD_BG, foreground=TEXT,
                     bordercolor=BORDER, lightcolor=FIELD_BG, darkcolor=FIELD_BG, rowheight=px(root, 20))
@@ -217,25 +143,11 @@ def apply_theme(root):
     style.configure("Treeview.Heading", background=WINDOW_BG, foreground=TEXT, bordercolor=BORDER,
                     lightcolor=WINDOW_BG, darkcolor=WINDOW_BG, relief="flat")
     style.map("Treeview.Heading", background=[("active", HOVER_BG)])
-    # 編集モードの一覧（Edit.Treeview）。縞は、一覧の側で1行おきに "band" の印を付けて塗る
-    style.configure("Edit.Treeview", bordercolor=EDIT_TABLE_BORDER, lightcolor=FIELD_BG, darkcolor=FIELD_BG)
-    style.map("Edit.Treeview", background=[("selected", PRESSED_BG)], foreground=[],
-              bordercolor=[("focus", EDIT_TABLE_BORDER)])
-    style.configure("Edit.Treeview.Heading", background=EDIT_TABLE_HEAD_BG, foreground=EDIT_TABLE_HEAD_FG,
-                    bordercolor=EDIT_TABLE_BORDER, lightcolor=EDIT_TABLE_HEAD_BG, darkcolor=EDIT_TABLE_HEAD_BG,
-                    font=(UI_FONT_FAMILY, UI_FONT_SIZE, "bold"))
-    style.map("Edit.Treeview.Heading", background=[("active", EDIT_TABLE_HEAD_ACTIVE)])
     style.configure("TScrollbar", troughcolor=WINDOW_BG, background="#c1c1c1", bordercolor=WINDOW_BG,
                     lightcolor="#c1c1c1", darkcolor="#c1c1c1", arrowcolor="#606060")
     style.map("TScrollbar", background=[("pressed", "#8a8a8a"), ("active", "#a8a8a8")],
               lightcolor=[("pressed", "#8a8a8a"), ("active", "#a8a8a8")],
               darkcolor=[("pressed", "#8a8a8a"), ("active", "#a8a8a8")])
-    # 上下の矢印のない、細い縦のスクロールバー（VA Case のカードの2行の欄。矢印があると、欄が2行より高くなるため。
-    # 2026-11-10）。色は TScrollbar から引き継ぐ
-    style.layout("Thin.Vertical.TScrollbar", [
-        ("Vertical.Scrollbar.trough", {"sticky": "ns", "children": [
-            ("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
-    style.configure("Thin.Vertical.TScrollbar", arrowsize=10)
     style.configure("TSeparator", background=BORDER)
     style.configure("TProgressbar", background=ACCENT, troughcolor=FIELD_BG, bordercolor=BORDER,
                     lightcolor=ACCENT, darkcolor=ACCENT)

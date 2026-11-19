@@ -4,7 +4,7 @@ from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 from pathlib import Path
 
-from . import printing
+from . import APP_NAME, printing
 from .ui import theme
 from .ui.wrapped_list import WrappedList
 
@@ -86,7 +86,7 @@ class PrintDialog(_Dialog):
         self.bind("<Return>", lambda e: self.ok())
         self._load_offset()
         if not names:
-            messagebox.showwarning(title, "使えるプリンターがありません。", parent=master)
+            messagebox.showwarning(APP_NAME, "使えるプリンターがありません。", parent=master)
 
     def _load_offset(self):
         dx, dy = self.cfg.printer_offset(self.printer.get())
@@ -101,7 +101,7 @@ class PrintDialog(_Dialog):
         try:
             out = printing.show_properties(self.winfo_id(), name, self.mode)
         except printing.PrintError as e:
-            messagebox.showerror(self.title(), str(e), parent=self)
+            messagebox.showerror(APP_NAME, str(e), parent=self)
             return
         if out is not None:
             self.mode = out
@@ -113,10 +113,10 @@ class PrintDialog(_Dialog):
         try:
             dx, dy = _mm(self.dx.get()), _mm(self.dy.get())
         except ValueError:
-            messagebox.showerror(self.title(), "ずれは、mm の数で入れてください。", parent=self)
+            messagebox.showerror(APP_NAME, "ずれは、mm の数で入れてください。", parent=self)
             return
         if abs(dx) > 30 or abs(dy) > 30:
-            messagebox.showerror(self.title(), "ずれは、30mm までにしてください。", parent=self)
+            messagebox.showerror(APP_NAME, "ずれは、30mm までにしてください。", parent=self)
             return
         self.cfg.set("printer", name)
         self.cfg.set_printer_offset(name, dx, dy)
@@ -226,7 +226,7 @@ class PhrasesDialog(_Dialog):
         side = ttk.Frame(b)
         side.grid(row=2, column=1, sticky="n", padx=(8, 0))
         for text, cmd in (("足す", self._add), ("上へ", lambda: self._move(-1)), ("下へ", lambda: self._move(1)),
-                          ("消す", self._delete)):
+                          ("削除", self._delete)):
             ttk.Button(side, text=text, command=cmd, takefocus=False).pack(fill="x", pady=(0, 4))
         btns = ttk.Frame(b)
         btns.grid(row=3, column=0, columnspan=2, sticky="e", pady=(12, 0))
@@ -424,7 +424,7 @@ class DpiDialog(_Dialog):
         except ValueError:
             v = 0
         if not 50 <= v <= 2400:
-            messagebox.showerror(self.title(), "解像度は、50〜2400 の数で入れてください。", parent=self)
+            messagebox.showerror(APP_NAME, "解像度は、50〜2400 の数で入れてください。", parent=self)
             return
         self.result = v
         self.destroy()

@@ -1,9 +1,12 @@
-"""［ヘルプ］→［診断情報をコピー］の文と、誤りの記録（VA Document・VA Case と同じ考え方）。
+"""診断情報（［ヘルプ］→［診断情報をコピー］。標準 02「診断情報」。雛形と同じ形）。
 
-入れるもの：版・OS・Python・様式・欄の数・入力した欄の数・用紙の画像を読み込んでいるか・直した位置の数・例文と既定の値の数・
-誤りの型と発生した場所（ファイル名・行・関数名）。
-入れないもの：欄の値（請求の内容）・例文の中身・ファイルの名前と場所・プリンターの名前・例外のメッセージの本文。
-誤りの記録は %APPDATA%\\VA Request\\errors.json（型と場所だけ。最近の 20 件）。
+不具合を AI や作成者に相談するときに渡す文を作る。中身（欄の値〔請求の内容〕・例文の中身・ファイルやフォルダの名前と
+場所・プリンターの名前・利用者と PC の名前・例外のメッセージの本文）は、一切入れない。入れてよいのは、版・環境・
+設定の値（選択肢・数値）・件数・誤りの型と起きた場所（ファイル名・行・関数名）だけとする。
+例外のメッセージの本文を入れないのは、ファイルの読み書きの誤り（OSError など）のメッセージに、フォルダの場所
+（依頼者の名前が入ることがある）が入るため。
+
+誤りの記録は、この PC の設定と同じフォルダ（%APPDATA%\\VA Request\\errors.json）に書く（閉じた後・落ちた後でも渡せるように）。
 """
 import json
 import os
@@ -13,53 +16,136 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-from . import VERSION_LABEL
+from . import config
 
-MAX_ERRORS = 20
+KEEP_ERRORS = 30     # 覚えておく誤りの数（古いものから消す）
+SHOW_ERRORS = 10     # 診断情報に載せる誤りの数（新しいものから）
+MAX_FRAMES = 12      # 1つの誤りに載せる場所の数（深い方から）
+
+
+def exception_record(exc, stage=""):
+    """例外を、型の名前と起きた場所だけの記録にする（メッセージの本文は入れない）。"""
+    frames = traceback.extract_tb(exc.__traceback__)[-MAX_FRAMES:]
+    record = {
+        "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "stage": stage,
+        "type": type(exc).__name__,
+        "where": [f"{Path(f.filename).name}:{f.lineno}:{f.name}" for f in frames],
+    }
+    # OSError の番号（何の誤りかの手がかりになり、場所や名前は含まない）
+    for name in ("errno", "winerror"):
+        value = getattr(exc, name, None)
+        if isinstance(value, int):
+            record[name] = value
+    cause = exc.__cause__ or exc.__context__
+    if cause is not None:
+        record["cause"] = type(cause).__name__
+    return record
+
+
+def errors_path():
+    """誤りの記録の置き場所（この PC の設定と同じフォルダ）。"""
+    return config.config_dir() / "errors.json"
+
+
+def _same(a, b):
+    return all(a.get(k) == b.get(k) for k in ("stage", "type", "where", "errno", "winerror", "cause"))
 
 
 class ErrorLog:
-    def __init__(self, folder):
-        self.path = Path(folder) / "errors.json"
+    """起きた誤りを覚える（型と場所だけ）。閉じた後や、落ちた後でも渡せるよう、ファイルにも書く。
 
-    def load(self):
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-            return data if isinstance(data, list) else []
-        except (OSError, ValueError):
-            return []
+    書けなくても、画面の動きは止めない（診断のための記録なので）。同じ誤りが続けて起きたときは、1件にまとめて
+    回数を数える（ほかの誤りが押し出されないように）。
+    """
 
-    def record(self, exc, where):
-        """誤りの型と、発生した場所（このパッケージの中の最後の場所）だけを覚える。"""
-        place = ""
-        for frame in traceback.extract_tb(exc.__traceback__):
-            place = f"{Path(frame.filename).name}:{frame.lineno}:{frame.name}"
-        items = self.load()
-        items.append({"time": datetime.now().strftime("%Y-%m-%d %H:%M"), "type": type(exc).__name__,
-                      "place": place, "where": where})
+    def __init__(self, path=None):
+        self.path = Path(path) if path else errors_path()
         try:
+            records = json.loads(self.path.read_text(encoding="utf-8"))
+            self.records = [r for r in records if isinstance(r, dict)][-KEEP_ERRORS:]
+        except (OSError, ValueError, TypeError):
+            self.records = []
+
+    def record(self, exc, stage=""):
+        try:
+            new = exception_record(exc, stage)
+            if self.records and _same(self.records[-1], new):
+                last = self.records[-1]
+                last["at"] = new["at"]
+                last["count"] = int(last.get("count", 1)) + 1
+            else:
+                self.records.append(new)
+                self.records = self.records[-KEEP_ERRORS:]
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_bytes(json.dumps(items[-MAX_ERRORS:], ensure_ascii=False, indent=1).encode("utf-8"))
+            tmp = self.path.with_suffix(".tmp")
+            # 改行を変えないよう、バイトで書く（Windows の write_text は \n を \r\n にする）
+            tmp.write_bytes(json.dumps(self.records, ensure_ascii=False, indent=1).encode("utf-8"))
+            os.replace(tmp, self.path)
+        except Exception:
+            pass
+
+    def clear(self):
+        self.records = []
+        try:
+            self.path.unlink(missing_ok=True)
         except OSError:
             pass
 
 
-def text(state, errors):
-    """診断情報の文。state は、数と有無だけを入れた辞書（呼ぶ側が作る）。"""
+def format_record(record):
+    """1件の誤りを、診断情報に載せる行にする。"""
+    head = f"{record.get('at', '')}　{record.get('type', '')}"
+    extra = [f"{key}={record[key]}" for key in ("errno", "winerror") if key in record]
+    if record.get("cause"):
+        extra.append(f"原因 {record['cause']}")
+    if int(record.get("count", 1)) > 1:
+        extra.append(f"続けて {record['count']} 回")
+    if extra:
+        head += "（" + "・".join(extra) + "）"
+    lines = [head]
+    if record.get("stage"):
+        lines.append(f"    処理：{record['stage']}")
+    for where in record.get("where", []):
+        lines.append(f"    {where}")
+    return lines
+
+
+def environment_lines(root, title, version):
+    """環境（版・OS・Python/Tk・画面）の行。利用者名・PC 名・フォルダの場所は入れない。"""
+    frozen = getattr(sys, "frozen", False)
     lines = [
-        f"VA Request {VERSION_LABEL}",
-        f"OS: {platform.system()} {platform.release()} ({platform.version()})",
-        f"Python: {sys.version.split()[0]}{'（実行ファイル）' if getattr(sys, 'frozen', False) else ''}",
-        f"画面の拡大率: {state.get('scale', '-')}",
+        f"ツール：{title}  {version}（{'exe' if frozen else 'ソースから起動'}）",
+        f"OS：{platform.platform()}",
+        f"Python：{platform.python_version()}　Tk：{_tk_patchlevel(root)}",
     ]
-    for k, v in state.items():
-        if k != "scale":
-            lines.append(f"{k}: {v}")
-    lines.append("最近の誤り：" + ("なし" if not errors else ""))
-    for e in errors[-10:]:
-        lines.append(f"  {e.get('time', '')} {e.get('type', '')} {e.get('place', '')}（{e.get('where', '')}）")
-    return "\n".join(lines)
+    try:
+        scale = root.winfo_fpixels("1i") / 96.0
+        lines.append(f"画面：{root.winfo_screenwidth()}×{root.winfo_screenheight()}・拡大率 {scale:.0%}・"
+                     f"ウィンドウ {root.winfo_width()}×{root.winfo_height()}")
+    except Exception:       # 画面の情報が取れなくても、診断情報は作る
+        pass
+    return lines
 
 
-def config_folder_exists(folder):
-    return "あり" if os.path.isdir(folder) else "なし"
+def diagnostic_text(root, title, version, setting_lines, state_lines, errors):
+    """診断情報の文を組み立てる。setting_lines・state_lines は、値・場所・名前を入れない行（呼ぶ側で作る）。"""
+    lines = [f"{title} 診断情報（{datetime.now():%Y-%m-%d %H:%M}）",
+             "※ 文書の中身、ファイルやフォルダの場所・名前、利用者と PC の名前は入っていません。", ""]
+    lines += ["■ 環境"] + environment_lines(root, title, version) + [""]
+    lines += ["■ この PC の設定"] + list(setting_lines) + [""]
+    lines += ["■ 状態"] + list(state_lines) + [""]
+    records = errors.records
+    lines.append(f"■ 起きた誤り（新しいものから {min(len(records), SHOW_ERRORS)} 件。覚えているのは全 {len(records)} 件）")
+    if not records:
+        lines.append("なし")
+    for r in reversed(records[-SHOW_ERRORS:]):
+        lines += format_record(r)
+    return "\n".join(lines) + "\n"
+
+
+def _tk_patchlevel(root):
+    try:
+        return root.tk.call("info", "patchlevel")
+    except Exception:
+        return "不明"

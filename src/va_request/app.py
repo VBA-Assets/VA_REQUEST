@@ -20,7 +20,7 @@ from tkinter import filedialog, messagebox, ttk
 import pypdfium2 as pdfium
 from PIL import Image, ImageTk
 
-from . import VERSION_LABEL, diagnostics, forms, pdfdoc, printing, render
+from . import ABOUT_LINE, APP_NAME, VERSION_LABEL, diagnostics, forms, pdfdoc, printing, render
 from .config import Config
 from .phrases import FILE_NAME as PHRASES_FILE, PhrasesChanged, PhrasesError, PhraseStore
 from .dialogs import DpiDialog, OptionsDialog, PhraseSelectDialog, PhrasesDialog, PrintDialog
@@ -29,8 +29,6 @@ from .ui.icons import IconSet
 from .ui.ribbon import Ribbon
 from .ui.window_icon import set_window_icon
 
-TITLE = "VA Request"
-ABOUT_LINE = "職務上請求書の用紙に、字を正しい位置に刷る"
 FORM_LABELS = {"A": "A用紙　戸籍謄本等職務上請求書", "B": "B用紙　住民票の写し等職務上請求書",
                "C": "C用紙　戸籍謄本等請求書", "D": "D用紙　住民票の写し等請求書"}
 KIND_LABELS = {"text": "1行の字", "multiline": "何行かの字", "number": "数", "circle": "囲み（○）",
@@ -54,11 +52,11 @@ class App:
     def __init__(self, root, cfg=None, open_path=None):
         self.root = root
         self.cfg = cfg or Config()
-        self.errors = diagnostics.ErrorLog(self.cfg.folder)
+        self.errors = diagnostics.ErrorLog(Path(self.cfg.folder) / "errors.json")
         root.report_callback_exception = self._on_callback_error
         theme.apply_theme(root)
         ime.follow_focus(root)      # IME の入力中の字を、入力欄の書体で出す（VA Case と同じ）
-        root.title(TITLE)
+        root.title(APP_NAME)
         set_window_icon(root)
         self.field_font = theme.field_font(root)
         self.icons = IconSet(root)
@@ -160,9 +158,14 @@ class App:
         for key, d in (("Left", (-1, 0)), ("Right", (1, 0)), ("Up", (0, -1)), ("Down", (0, 1))):
             c.bind(f"<{key}>", lambda e, d=d: self._nudge(d, 0.5))
             c.bind(f"<Shift-{key}>", lambda e, d=d: self._nudge(d, SNAP))
-        for seq, cmd in (("<Control-s>", self.save), ("<Control-p>", self.print_request),
-                         ("<Control-o>", self.open_dialog), ("<Control-n>", self.new_request)):
-            root.bind_all(seq, lambda e, cmd=cmd: (cmd(), "break")[1])
+        # ショートカット。Mac では Ctrl に加えて ⌘ でも同じ働きにする（⌘ は Mac のときだけ。標準 02「メニュー」）。
+        # Caps Lock でも効くよう大文字にも付ける
+        mods = ("Control", "Command") if root.tk.call("tk", "windowingsystem") == "aqua" else ("Control",)
+        for letter, cmd in (("s", self.save), ("p", self.print_request), ("o", self.open_dialog),
+                            ("n", self.new_request)):
+            for mod in mods:
+                for k in (letter, letter.upper()):
+                    root.bind_all(f"<{mod}-Key-{k}>", lambda e, cmd=cmd: (cmd(), "break")[1])
 
     def _build_menu(self):
         bar = tk.Menu(self.root)
@@ -178,14 +181,14 @@ class App:
         h = tk.Menu(bar, tearoff=False)
         h.add_command(label="診断情報をコピー", command=self.copy_diagnostics)
         h.add_separator()
-        h.add_command(label=f"{TITLE} について", command=self.about)
+        h.add_command(label=f"{APP_NAME} について", command=self.about)
         bar.add_cascade(label="ヘルプ", menu=h)
         self.root.configure(menu=bar)
 
     # ================================================================ 状態の表示
     def _update_title(self):
         name = Path(self.path).name if self.path else "新しい請求"
-        self.root.title(f"{'*' if self.dirty else ''}{name} - {TITLE}")
+        self.root.title(f"{'＊' if self.dirty else ''}{name} - {APP_NAME}")
         parts = [FORM_LABELS[self.key]]
         if self.mode == "input":
             parts.append(self._field_status())
@@ -621,17 +624,17 @@ class App:
         if self.mode != "input":
             return
         if self.selected is None or self.field(self.selected)["type"] not in ("text", "number", "multiline"):
-            messagebox.showinfo(TITLE, "例文は、字を入れる欄を選んでから選びます。", parent=self.root)
+            messagebox.showinfo(APP_NAME, "例文は、字を入れる欄を選んでから選びます。", parent=self.root)
             return
         f = self.field(self.selected)
         try:
             items = self.phrase_store.phrases(self.key, f["id"])
         except PhrasesError:
-            messagebox.showerror(TITLE, "例文のファイルを読めません。保存場所（［ファイル］→［オプション］）に"
+            messagebox.showerror(APP_NAME, "例文のファイルを読めません。保存場所（［ファイル］→［オプション］）に"
                                         "つながっているかを確かめてください。", parent=self.root)
             return
         if not items:
-            messagebox.showinfo(TITLE, f"この欄（{forms.label(f)}）の例文はありません。リボンの［例文の登録］で足せます。",
+            messagebox.showinfo(APP_NAME, f"この欄（{forms.label(f)}）の例文はありません。リボンの［例文の登録］で足せます。",
                                 parent=self.root)
             return
         text = PhraseSelectDialog(self.root, items, forms.label(f), self.field_font,
@@ -666,7 +669,7 @@ class App:
 
     def edit_phrases(self):
         if self.selected is None or self.field(self.selected)["type"] not in ("text", "number", "multiline"):
-            messagebox.showinfo(TITLE, "例文は、字を入れる欄を選んでから登録します。", parent=self.root)
+            messagebox.showinfo(APP_NAME, "例文は、字を入れる欄を選んでから登録します。", parent=self.root)
             return
         fid = self.selected
         f = self.field(fid)
@@ -675,7 +678,7 @@ class App:
             stamp = store.stamp()
             items = store.phrases(self.key, fid)
         except PhrasesError:
-            messagebox.showerror(TITLE, "例文のファイルを読めません。保存場所（［ファイル］→［オプション］）に"
+            messagebox.showerror(APP_NAME, "例文のファイルを読めません。保存場所（［ファイル］→［オプション］）に"
                                         "つながっているかを確かめてください。", parent=self.root)
             return
         result = PhrasesDialog(self.root, items, forms.label(f), self.field_font,
@@ -687,14 +690,14 @@ class App:
                 store.save_field(self.key, fid, result, expected_stamp=stamp)
             except PhrasesChanged:
                 if not messagebox.askyesno(
-                        TITLE, "例文の登録の画面を開いている間に、ほかの人（またはほかの画面）が例文のファイルを"
+                        APP_NAME, "例文の登録の画面を開いている間に、ほかの人（またはほかの画面）が例文のファイルを"
                                f"変えました。\n\nこの欄（{forms.label(f)}）の例文を、いま登録した内容で書きますか？"
                                "（ほかの欄の例文は、変えられたもののまま残ります）", parent=self.root):
                     self._update_title()
                     return
                 store.save_field(self.key, fid, result, force=True)
         except PhrasesError:
-            messagebox.showerror(TITLE, "例文のファイルに書けませんでした。保存場所（［ファイル］→［オプション］）に"
+            messagebox.showerror(APP_NAME, "例文のファイルに書けませんでした。保存場所（［ファイル］→［オプション］）に"
                                         "つながっているか、ほかのソフトで開いていないかを確かめてください。",
                                  parent=self.root)
             return
@@ -730,11 +733,11 @@ class App:
             if not new_store.exists():
                 current = self.phrase_store.load_all()
                 if any(current.values()) and messagebox.askyesno(
-                        TITLE, f"新しい保存場所には「{PHRASES_FILE}」がありません。今の例文を、新しい保存場所に"
+                        APP_NAME, f"新しい保存場所には「{PHRASES_FILE}」がありません。今の例文を、新しい保存場所に"
                                "写しますか？\n\n［いいえ］を選ぶと、例文のない状態から始めます。", parent=self.root):
                     new_store.save_all(current)
         except PhrasesError:
-            messagebox.showerror(TITLE, "新しい保存場所に例文を写せませんでした。保存場所を変えずに戻ります。",
+            messagebox.showerror(APP_NAME, "新しい保存場所に例文を写せませんでした。保存場所を変えずに戻ります。",
                                  parent=self.root)
             return
         self.cfg.set_phrases_folder(chosen)
@@ -744,11 +747,11 @@ class App:
 
     def set_default(self):
         if self.selected is None:
-            messagebox.showinfo(TITLE, "既定の値にする欄を選んでください。", parent=self.root)
+            messagebox.showinfo(APP_NAME, "既定の値にする欄を選んでください。", parent=self.root)
             return
         v = self.values.get(self.selected)
         if forms.is_empty(v):
-            messagebox.showinfo(TITLE, "欄が空です。字を入れてから［既定の値にする］を押してください。", parent=self.root)
+            messagebox.showinfo(APP_NAME, "欄が空です。字を入れてから［既定の値にする］を押してください。", parent=self.root)
             return
         self.cfg.set_default(self.key, self.selected, v)
         self.cfg.save()
@@ -765,7 +768,7 @@ class App:
     def _confirm_discard(self):
         if not self.dirty:
             return True
-        return messagebox.askyesno(TITLE, "保存していない変更があります。変更を捨てますか？", icon="warning",
+        return messagebox.askyesno(APP_NAME, "保存していない変更があります。変更を捨てますか？", icon="warning",
                                    default="no", parent=self.root)
 
     def _reset(self, key, form, values, path=None, opened=False, image=None):
@@ -811,10 +814,10 @@ class App:
         try:
             opened = pdfdoc.read(path)
         except pdfdoc.NotRequestPdf:
-            messagebox.showerror(TITLE, "この PDF は開けません。VA Request で保存した PDF だけを開けます。", parent=self.root)
+            messagebox.showerror(APP_NAME, "この PDF は開けません。VA Request で保存した PDF だけを開けます。", parent=self.root)
             return
         except OSError:
-            messagebox.showerror(TITLE, "PDF を読めませんでした。", parent=self.root)
+            messagebox.showerror(APP_NAME, "PDF を読めませんでした。", parent=self.root)
             return
         key = opened["form"]
         form = pdfdoc.form_of(opened, forms.effective(self.cfg, key))
@@ -830,7 +833,7 @@ class App:
         if not overflow:
             return True
         return messagebox.askokcancel(
-            TITLE, f"{self._labels(overflow)} は、字を小さくしても欄に入りきりません（赤い四角）。"
+            APP_NAME, f"{self._labels(overflow)} は、字を小さくしても欄に入りきりません（赤い四角）。"
                    f"字は削らずにそのまま{action}ので、欄からはみ出します。続けますか？", icon="warning", parent=self.root)
 
     def save(self):
@@ -850,7 +853,7 @@ class App:
         try:
             pdfdoc.save(path, self.form, self.values, image=self.image_bytes)
         except OSError:
-            messagebox.showerror(TITLE, "PDF を書き込めませんでした。ほかのソフトでこの PDF を開いていれば、閉じてから、"
+            messagebox.showerror(APP_NAME, "PDF を書き込めませんでした。ほかのソフトでこの PDF を開いていれば、閉じてから、"
                                         "もう一度保存してください。", parent=self.root)
             return False
         self.path = str(path)
@@ -868,7 +871,7 @@ class App:
         if forms.field_positions(current) == forms.field_positions(self.form):
             return self.form
         ans = messagebox.askyesnocancel(
-            TITLE, "この請求を保存した後に、欄の位置を合わせ直しています（用紙のロットが替わったときなど）。\n\n"
+            APP_NAME, "この請求を保存した後に、欄の位置を合わせ直しています（用紙のロットが替わったときなど）。\n\n"
                    "［はい］今の位置で刷る\n［いいえ］保存したときの位置で刷る", parent=self.root)
         if ans is None:
             return None
@@ -878,7 +881,7 @@ class App:
         if self.mode != "input":
             return
         if self.dirty or not self.path:
-            if not messagebox.askokcancel(TITLE, "印刷の前に、PDF を保存します。", parent=self.root):
+            if not messagebox.askokcancel(APP_NAME, "印刷の前に、PDF を保存します。", parent=self.root):
                 return
             if not self.save():
                 return
@@ -893,7 +896,7 @@ class App:
         """［試し印刷］は持たない（2026-11-14 班長指示「保存したPDFを印刷すれば良い」）。用紙と字の重なりを普通紙で
         確かめるときは、保存した PDF（用紙の画像入り）を、PDF を見るソフトから実際の大きさで刷る。"""
         if not printing.available():
-            messagebox.showinfo(TITLE, "印刷は Windows だけでできます。", parent=self.root)
+            messagebox.showinfo(APP_NAME, "印刷は Windows だけでできます。", parent=self.root)
             return
         chosen = PrintDialog(self.root, self.cfg, title=title).show()
         if not chosen:
@@ -902,9 +905,9 @@ class App:
         data, _ = render.make_pdf(form, self.values, with_image=with_image, image=self.image_bytes, offset=(dx, dy))
         try:
             hdc = printing.make_dc(name, mode)
-            printing.print_pdf(data, hdc, f"{TITLE} {title}")
+            printing.print_pdf(data, hdc, f"{APP_NAME} {title}")
         except printing.PrintError as e:
-            messagebox.showerror(TITLE, str(e), parent=self.root)
+            messagebox.showerror(APP_NAME, str(e), parent=self.root)
 
     # ================================================================ 用紙の画像
     def paper_menu(self):
@@ -924,7 +927,7 @@ class App:
             img = Image.open(path)
             img.load()
         except Exception:
-            messagebox.showerror(TITLE, "画像を読めませんでした。PNG か JPEG の画像を選んでください。", parent=self.root)
+            messagebox.showerror(APP_NAME, "画像を読めませんでした。PNG か JPEG の画像を選んでください。", parent=self.root)
             return
         dpi = img.info.get("dpi", (0, 0))[0]
         if not dpi or dpi < 50:
@@ -933,7 +936,7 @@ class App:
                 return
         w_mm, h_mm = img.width / dpi * 25.4, img.height / dpi * 25.4
         if w_mm < 150 or h_mm < 200:
-            if not messagebox.askokcancel(TITLE, f"画像の大きさが {w_mm:.0f}×{h_mm:.0f}mm です。用紙（A4）より小さいようです。"
+            if not messagebox.askokcancel(APP_NAME, f"画像の大きさが {w_mm:.0f}×{h_mm:.0f}mm です。用紙（A4）より小さいようです。"
                                                  "解像度が正しくないかもしれません。続けますか？", parent=self.root):
                 return
         self._corner_image = (img, float(dpi))
@@ -959,7 +962,7 @@ class App:
         self._close_editor()
         self._load_modebar()
         self.render_now()
-        messagebox.showinfo(TITLE, "用紙の画像を読み込みました。欄（点線の四角）が用紙の欄に合っているかを見て、ずれていれば"
+        messagebox.showinfo(APP_NAME, "用紙の画像を読み込みました。欄（点線の四角）が用紙の欄に合っているかを見て、ずれていれば"
                                    "［欄の位置］で合わせてください。", parent=self.root)
 
     def cancel_corner(self):
@@ -971,7 +974,7 @@ class App:
         self.render_now()
 
     def reset_paper(self):
-        if not messagebox.askyesno(TITLE, "読み込んだ用紙の画像を消して、ダミーの用紙に戻しますか？（欄の位置は、そのままです）",
+        if not messagebox.askyesno(APP_NAME, "読み込んだ用紙の画像を消して、ダミーの用紙に戻しますか？（欄の位置は、そのままです）",
                                    parent=self.root):
             return
         self.cfg.clear_paper(self.key)
@@ -1004,7 +1007,7 @@ class App:
                 row=0, column=0, sticky="w")
             ttk.Label(bar, text="スキャンした画像の、用紙の左上の角（紙の端）をクリックします。用紙の位置が決まります。",
                       wraplength=theme.px(bar, 520), justify="left").grid(row=1, column=0, sticky="w", pady=(2, 0))
-            ttk.Button(bar, text="やめる", command=self.cancel_corner).grid(row=0, column=1, rowspan=2, sticky="ne",
+            ttk.Button(bar, text="キャンセル", command=self.cancel_corner).grid(row=0, column=1, rowspan=2, sticky="ne",
                                                                           padx=(16, 0))
             bar.columnconfigure(0, weight=1)
             return
@@ -1067,7 +1070,7 @@ class App:
         try:
             l, t, w, h = (float(self.pos_vars[k].get()) for k in ("l", "t", "w", "h"))
         except ValueError:
-            messagebox.showerror(TITLE, "位置と大きさは、mm の数で入れてください。", parent=self.root)
+            messagebox.showerror(APP_NAME, "位置と大きさは、mm の数で入れてください。", parent=self.root)
             return
         if w < 1 or h < 1:
             return
@@ -1087,7 +1090,7 @@ class App:
         self._commit_positions()
 
     def reset_all(self):
-        if not messagebox.askyesno(TITLE, "この様式のすべての欄を、初めの位置（ダミーの用紙での位置）に戻しますか？", parent=self.root):
+        if not messagebox.askyesno(APP_NAME, "この様式のすべての欄を、初めの位置（ダミーの用紙での位置）に戻しますか？", parent=self.root):
             return
         self.cfg.set_positions(self.key, {})
         self.cfg.save()
@@ -1170,24 +1173,32 @@ class App:
         return "break"
 
     # ================================================================ ヘルプ・終わり
-    def about(self):
-        messagebox.showinfo(TITLE, f"{TITLE}  {VERSION_LABEL}\n{ABOUT_LINE}\n\nVBAアセット（vba-assets.net）\nMIT License",
-                            parent=self.root)
+    def about_text(self):
+        """「について」の5行（標準 01「について」）。"""
+        return f"{APP_NAME}  {VERSION_LABEL}\n{ABOUT_LINE}\n\nVBAアセット（vba-assets.net）\nMIT License"
 
-    def diagnostic_state(self):
-        filled = sum(1 for v in self.values.values() if not forms.is_empty(v))
+    def about(self):
+        messagebox.showinfo(APP_NAME, self.about_text(), parent=self.root)
+
+    def diagnostic_settings(self):
+        """診断情報に載せる、この PC の設定（数と有無だけ。既定の値・例文の中身・場所・プリンターの名前は入れない）。"""
         return {
-            "scale": f"{theme.scale(self.root):.2f}",
-            "様式": self.key,
-            "欄の数": len(self.form["fields"]),
-            "入力した欄の数": filled,
-            "開いた PDF か": "はい" if self.opened else "いいえ",
             "用紙の画像": "読み込んだもの" if self.form.get("custom_paper") else "ダミー",
             "直した欄の位置の数": len(self.cfg.positions(self.key)),
             "例文の保存場所": "既定" if self.cfg.phrases_folder_is_default() else "指定した場所",
             "例文のある欄の数": self._phrase_count(),
             "既定の値の数": len(self.cfg.defaults(self.key)),
             "プリンターのずれを覚えている数": len(self.cfg.data.get("printer_offsets", {})),
+        }
+
+    def diagnostic_state(self):
+        """診断情報に載せる状態（数と有無だけ。欄の値〔請求の内容〕・ファイルの名前と場所は入れない）。"""
+        filled = sum(1 for v in self.values.values() if not forms.is_empty(v))
+        return {
+            "様式": self.key,
+            "欄の数": len(self.form["fields"]),
+            "入力した欄の数": filled,
+            "開いた PDF か": "はい" if self.opened else "いいえ",
             "入りきらない欄の数": len(self.overflow),
         }
 
@@ -1198,10 +1209,12 @@ class App:
             return "読めない"
 
     def copy_diagnostics(self):
-        text = diagnostics.text(self.diagnostic_state(), self.errors.load())
+        settings = [f"{k}：{v}" for k, v in self.diagnostic_settings().items()]
+        state = [f"{k}：{v}" for k, v in self.diagnostic_state().items()]
+        text = diagnostics.diagnostic_text(self.root, APP_NAME, VERSION_LABEL, settings, state, self.errors)
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
-        messagebox.showinfo(TITLE, "診断情報をコピーしました。\n\n欄の値（請求の内容）・例文・ファイルの名前と場所は入っていません。"
+        messagebox.showinfo(APP_NAME, "診断情報をコピーしました。\n\n欄の値（請求の内容）・例文・ファイルの名前と場所は入っていません。"
                                    "不具合を相談するときに、貼り付けて使ってください。", parent=self.root)
 
     def _on_callback_error(self, exc_type, exc, tb):
@@ -1209,7 +1222,7 @@ class App:
         import traceback
         traceback.print_exception(exc_type, exc, tb)
         try:
-            messagebox.showerror(TITLE, "思わぬ誤りが起きました。［ヘルプ］→［診断情報をコピー］で、誤りの種類と場所を"
+            messagebox.showerror(APP_NAME, "思わぬ誤りが起きました。［ヘルプ］→［診断情報をコピー］で、誤りの種類と場所を"
                                         "コピーできます。", parent=self.root)
         except Exception:
             pass
