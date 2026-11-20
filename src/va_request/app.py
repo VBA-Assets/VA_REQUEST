@@ -101,13 +101,18 @@ class App:
         self.ribbon = Ribbon(root, self.icons)
         self.ribbon.pack(fill="x")
         g = self.ribbon.group("ファイル")
+        # 並びはメニューと同じ（開く・保存・印刷・閉じる。標準 02「メニュー」）。［新しい請求］は置かない。起動したときから
+        # 空の請求があり、書き終えたら［閉じる］で空の請求に戻す（2026-11-21 班長決定）
+        self.btn_open = g.large("開く", self.open_dialog, icon="folder_open",
+                                tip="VA Request で保存した PDF を開き、直したり、刷り直したりします（Ctrl+O）。")
         self.btn_save = g.large("保存", self.save, icon="save",
                                 tip="用紙の画像と字を重ねた PDF を保存します（Ctrl+S）。弁護士に確かめてもらうためのものです。"
                                     "開き直した請求は、同じファイルに上書きします。")
         self.btn_print = g.large("印刷", self.print_request, icon="print",
                                  tip="字だけを、用紙に刷ります（Ctrl+P）。保存していなければ、先に PDF を保存します。")
-        g.small("新しい請求", self.new_request, tip="空の請求を始めます（Ctrl+N）。既定の値を入れた欄は、初めから入っています。")
-        g.small("開く", self.open_dialog, tip="VA Request で保存した PDF を開き、直したり、刷り直したりします（Ctrl+O）。")
+        self.btn_close = g.small("閉じる", self.close_request, icon="document_dismiss",
+                                 tip="今の請求を閉じて、空の請求にします（Ctrl+W）。既定の値を入れた欄は、初めから入っています。"
+                                     "空の請求のまま何も入れていない間は、押せません。")
 
         g = self.ribbon.group("様式")
         self.form_var = tk.StringVar(value=FORM_LABELS[self.key])
@@ -162,18 +167,19 @@ class App:
         # Caps Lock でも効くよう大文字にも付ける
         mods = ("Control", "Command") if root.tk.call("tk", "windowingsystem") == "aqua" else ("Control",)
         for letter, cmd in (("s", self.save), ("p", self.print_request), ("o", self.open_dialog),
-                            ("n", self.new_request)):
+                            ("w", self.close_request)):
             for mod in mods:
                 for k in (letter, letter.upper()):
                     root.bind_all(f"<{mod}-Key-{k}>", lambda e, cmd=cmd: (cmd(), "break")[1])
 
     def _build_menu(self):
         bar = tk.Menu(self.root)
-        # ［ファイル］：新しい請求・開く・保存（2026-11-14 班長指示）とオプション
+        # ［ファイル］：開く・保存・閉じる（2026-11-14 班長指示。［新しい請求］を［閉じる］に改めた。2026-11-21 班長決定。
+        # 標準 02「メニュー」）とオプション
         fm = tk.Menu(bar, tearoff=False)
-        fm.add_command(label="新しい請求", accelerator="Ctrl+N", command=self.new_request)
         fm.add_command(label="開く…", accelerator="Ctrl+O", command=self.open_dialog)
         fm.add_command(label="保存", accelerator="Ctrl+S", command=self.save)
+        fm.add_command(label="閉じる", accelerator="Ctrl+W", command=self.close_request)
         fm.add_separator()
         fm.add_command(label="オプション…", command=self.options)
         bar.add_cascade(label="ファイル", menu=fm)
@@ -209,8 +215,13 @@ class App:
         for b in (self.btn_save, self.btn_print, self.btn_choose, self.btn_phrases, self.btn_default,
                   self.btn_clear_default, self.btn_today):
             b.configure(state=state)
-        for label in ("新しい請求", "開く…", "保存", "オプション…"):     # 位置合わせの間は、ファイルの操作をしない
+        for label in ("開く…", "保存", "オプション…"):     # 位置合わせの間は、ファイルの操作をしない
             self.file_menu.entryconfigure(label, state=state)
+        self.btn_open.configure(state=state)
+        # ［閉じる］は、空の請求のまま何も入れていない間も押せない（標準 02「メニュー」。2026-11-21 班長決定）
+        close_state = "disabled" if self.mode != "input" or self.is_blank() else "normal"
+        self.file_menu.entryconfigure("閉じる", state=close_state)
+        self.btn_close.configure(state=close_state)
         for b in (self.btn_paper, self.btn_position):
             b.configure(state="disabled" if self.opened or self.mode == "corner" else "normal")
         self.form_box.configure(state="disabled" if self.opened or self.mode != "input" else "readonly")
@@ -784,8 +795,13 @@ class App:
         self._load_modebar()
         self.render_now()
 
-    def new_request(self):
-        if self.mode != "input" or not self._confirm_discard():
+    def is_blank(self):
+        """空の請求のまま何も入れていないか（保存も開きもしておらず、変更がない。［閉じる］を押せない）。"""
+        return not self.path and not self.dirty
+
+    def close_request(self):
+        """［閉じる］：今の請求を閉じて、空の請求にする（既定の値だけを入れる。前の請求の内容を残さない）。"""
+        if self.mode != "input" or self.is_blank() or not self._confirm_discard():
             return
         self._reset(self.key, forms.effective(self.cfg, self.key), self.cfg.defaults(self.key))
 

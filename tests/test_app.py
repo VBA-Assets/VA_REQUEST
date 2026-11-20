@@ -123,8 +123,8 @@ def test_save_open_overwrite_only(app, tmp_path, monkeypatch):
     monkeypatch.setattr(app_mod.filedialog, "asksaveasfilename", lambda **k: str(path))
     app.values = {2: "架空市", 6: "架空の字"}
     assert app.save() and path.exists() and not app.dirty
-    # 新しい請求にしてから開き直す
-    app.new_request()
+    # 閉じて（空の請求にして）から開き直す
+    app.close_request()
     assert app.values == {} and app.path is None
     app.open_pdf(path, confirmed=True)
     assert app.opened and app.values == {2: "架空市", 6: "架空の字"}
@@ -161,7 +161,7 @@ def test_values_of_removed_field_are_dropped(app, tmp_path):
     app.open_pdf(path, confirmed=True)
     assert app.values == {6: "架空の字"}
     app.cfg.set_default("A", 10, "架空の既定の値")
-    app.new_request()
+    app.close_request()
     assert 10 not in app.values
 
 
@@ -171,7 +171,7 @@ def test_defaults_for_new_request(app):
     app.editor.insert("end", "架空 一郎")
     app.set_default()
     assert "既定の値：架空 一郎" in app.status.cget("text")      # 状態の行に出す（右の欄は除いた）
-    app.new_request()
+    app.close_request()
     assert app.values == {21: "架空 一郎"}
 
 
@@ -285,16 +285,34 @@ def test_phrases_dialog_edit_in_list(root):
 
 
 def test_file_menu_and_save_button(app):
-    """［ファイル］に新しい請求・開く・保存、リボンの保存は「保存」（2026-11-14 班長指示）。"""
+    """［ファイル］に開く・保存・閉じる（2026-11-14 班長指示。［新しい請求］を［閉じる］に改めた。2026-11-21 班長決定）、
+    リボンの保存は「保存」。"""
     m = app.file_menu
     labels = [m.entrycget(i, "label") for i in range(m.index("end") + 1) if m.type(i) == "command"]
-    assert labels == ["新しい請求", "開く…", "保存", "オプション…"]
+    assert labels == ["開く…", "保存", "閉じる", "オプション…"]
+    assert [m.entrycget(i, "accelerator") for i in range(3)] == ["Ctrl+O", "Ctrl+S", "Ctrl+W"]
     assert app.btn_save.cget("text") == "保存"
     assert not hasattr(app, "btn_test") and not hasattr(app, "test_print")      # 試し印刷は持たない
     app.toggle_position()
     assert m.entrycget("保存", "state") == "disabled"
     app.toggle_position()
     assert m.entrycget("保存", "state") == "normal"
+
+
+def test_close_is_disabled_while_blank(app, monkeypatch):
+    """空の請求のまま何も入れていない間は、［閉じる］（メニューとリボン）を押せない。字を入れれば押せ、Ctrl+W で
+    空の請求に戻る（標準 02「メニュー」。2026-11-21 班長決定）。"""
+    monkeypatch.setattr(app_mod.messagebox, "askyesno", lambda *a, **k: True)     # 変更を捨てる
+    app.close_request()
+    m = app.file_menu
+    assert app.is_blank()
+    assert m.entrycget("閉じる", "state") == "disabled" and str(app.btn_close.cget("state")) == "disabled"
+    app.set_value(6, "架空の字")
+    assert m.entrycget("閉じる", "state") == "normal" and str(app.btn_close.cget("state")) == "normal"
+    assert app.root.bind_all("<Control-Key-w>") and app.root.bind_all("<Control-Key-W>")    # Ctrl+W（Caps Lock でも）
+    app.close_request()
+    assert 6 not in app.values and app.is_blank()
+    assert m.entrycget("閉じる", "state") == "disabled"
 
 
 def test_remember_window(app, monkeypatch, tmp_path):
